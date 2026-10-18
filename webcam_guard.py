@@ -1,23 +1,28 @@
 import argparse
 import csv
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime
 
 import cv2
 
 # ============================================================
-#  WebCam Guard v1.1 — Advanced Edition
-#  Fitur baru vs v1.0:
-#   - Deteksi wajah (Haar cascade) + blur otomatis (privasi)
-#   - Zona pantauan (ROI) — hanya gerakan di zona terpilih
-#   - Multi-kamera: tekan C untuk pindah kamera saat runtime
-#   - Log kejadian ke events.csv + menu statistik
-#   - Headless mode: python webcam_guard.py --headless
-#   - Sensitivitas realtime: tekan + / - saat deteksi gerakan
-#   - Counter FPS + HUD status
+#  WebCam Guard v1.2 — Cybersecurity Lab Edition
+#  Fitur baru vs v1.1:
+#   - Mirror Server: bagikan layar ke penonton lab DENGAN
+#     persetujuan eksplisit + kode pairing/token + TLS + audit
+#   - Stealth Detector: kenali jejak aplikasi pemantauan
+#     tersembunyi dari dataset sintetis (defensif, read-only)
 #
-#  HANYA untuk kamera/laptop milik sendiri (edukasi, diawasi dosen).
+#  Fitur v1.1: deteksi wajah + blur, zona pantauan (ROI),
+#   multi-kamera, log kejadian (events.csv), headless mode,
+#   sensitivitas realtime, counter FPS + HUD status.
+#
+#  HANYA untuk perangkat milik sendiri / lab yang diotorisasi
+#  (edukasi, diawasi dosen). Tidak menyembunyikan proses dan
+#  tidak mengambil kredensial/data rahasia apa pun.
 # ============================================================
 
 RECORDINGS_DIR = "recordings"
@@ -407,17 +412,37 @@ def manual_record(camera_index=0, seconds=10):
 # ------------------------------------------------------------
 # Menu & CLI
 # ------------------------------------------------------------
+def _python_exe():
+    """Path interpreter saat ini (agar venv ikut terpakai)."""
+    return sys.executable or "python"
+
+
+def petunjuk_viewer():
+    """Petunjuk menjalankan penonton di laptop kedua (lab)."""
+    print("\n[i] ===== Mirror Viewer (laptop penonton) =====")
+    print("  1. Dari pengirim (menu 8): salin KODE PAIRING + TOKEN (admin/viewer).")
+    print("  2. Di laptop penonton, jalankan:")
+    print("       python mirror_viewer.py KODE-PAIRING --host <ip-pengirim> --role viewer --token TOKEN")
+    print("  3. Kontrol penonton: p=jeda, r=lanjut, s=minta stop, q=keluar.")
+    print("  4. Pengirim bisa jeda/stop/mencabut penonton kapan saja;")
+    print("     semua sesi tercatat di sessions.csv pada sisi pengirim.")
+    input("\nTekan Enter untuk kembali ke menu...")
+
+
 def menu(camera_index):
     while True:
-        print("\n========== WebCam Guard v1.1 ==========")
+        print("\n========== WebCam Guard v1.2 ==========")
         print("1. Live view kamera")
         print("2. Deteksi gerakan (zona + auto rekam)")
         print("3. Face Guard (deteksi wajah + blur privasi)")
         print("4. Rekam video manual (10 detik)")
         print("5. Statistik kejadian (log CSV)")
         print("6. Tes akses kamera (cek keamanan)")
-        print("7. Keluar")
-        pilih = input("Pilih menu [1-7]: ").strip()
+        print("7. Stealth Detector (simulasi defensif, dataset sintetis)")
+        print("8. Mirror Server (bagikan layar dgn persetujuan eksplisit)")
+        print("9. Petunjuk Mirror Viewer (untuk laptop penonton)")
+        print("0. Keluar")
+        pilih = input("Pilih menu [0-9]: ").strip()
 
         if pilih == "1":
             live_view(camera_index)
@@ -432,14 +457,26 @@ def menu(camera_index):
         elif pilih == "6":
             security_check()
         elif pilih == "7":
-            print("Sampai jumpa! Tetap amankan kameramu. :)")
+            print("  [*] Menjalankan Stealth Detector (dataset sintetis)...")
+            print("      Periksa juga folder startup laptop nyata:")
+            print("      python stealth_sim.py --lokal")
+            subprocess.run([_python_exe(), "stealth_sim.py"])
+        elif pilih == "8":
+            print("  [*] Menjalankan Mirror Server — persetujuan eksplisit wajib.")
+            subprocess.run([_python_exe(), "mirror_server.py"])
+        elif pilih == "9":
+            petunjuk_viewer()
+        elif pilih == "0":
+            print("Sampai jumpa! Tetap amankan perangkatmu. :)")
             break
         else:
             print("Pilihan tidak valid.")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="WebCam Guard v1.1 — pengawasan webcam lokal")
+    parser = argparse.ArgumentParser(
+        description="WebCam Guard v1.2 — pengawasan webcam lokal + lab "
+                    "mirroring (persetujuan eksplisit) + stealth detector defensif")
     parser.add_argument("-c", "--camera", type=int, default=0, help="index kamera (default: 0)")
     parser.add_argument("--headless", action="store_true", help="mode tanpa GUI: log gerakan ke CSV saja")
     parser.add_argument("-t", "--threshold", type=int, default=25, help="sensitivitas deteksi gerakan 5-100 (default: 25)")

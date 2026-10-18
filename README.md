@@ -1,44 +1,82 @@
-# WebCam Guard 🎥
+# WebCam Guard v1.2 — Cybersecurity Lab Edition
 
-Aplikasi pengawasan webcam **lokal** berbasis Python + OpenCV — project edukasi keamanan siber (di bawah pengawasan dosen).
+Proyek pembelajaran keamanan siber (diawasi dosen, Universitas Indonesia).
+**Hanya untuk perangkat milik sendiri / lab yang diotorisasi.**
 
-## ⚠️ Etika & Legalitas
-Tool ini HANYA untuk kamera/laptop milik sendiri. Mengakses kamera orang lain tanpa izin adalah ilegal (UU ITE).
+## Fitur v1.2 (baru)
 
-## Fitur (v1.1)
-1. **Live view** — real-time + HUD FPS, tekan `C` pindah kamera runtime
-2. **Deteksi gerakan** — snapshot + rekam otomatis, **zona pantauan (ROI)** dengan mouse (`Z`), sensitivitas realtime (`+`/`-`)
-3. **Face Guard** — deteksi wajah (Haar cascade) + **blur otomatis untuk privasi** (`B` toggle)
-4. **Rekam manual** — rekam video 10 detik
-5. **Statistik kejadian** — semua event tercatat ke `events.csv`, bisa dibaca lewat menu
-6. **Tes akses kamera** — bukti program biasa bisa membuka kamera tanpa peringatan
-7. **Headless mode** — `python webcam_guard.py --headless`: log gerakan tanpa GUI (untuk server/Raspberry Pi)
+| Fitur | File | Inti |
+|---|---|---|
+| Screen mirroring **dengan persetujuan eksplisit** | `mirror_server.py`, `mirror_viewer.py` | Kode pairing + token HMAC, TLS, audit `sessions.csv` |
+| Protokol streaming terenkripsi | `mirror_stream.py` | Wire format length-prefixed, self-signed cert via `cryptography`/`openssl` |
+| Autentikasi & peran | `mirror_auth.py` | Token HMAC-SHA256 per (kode, role), `ConsentGate`, state machine sesi |
+| Stealth Detector **defensif** | `stealth_sim.py`, `stealth_dataset.json` | Kenali jejak pemantauan tersembunyi dari dataset sintetis (proses, koneksi, persistensi, izin) |
+
+## Fitur v1.1 (tetap)
+
+Live view, deteksi gerakan + zona ROI + auto rekam, Face Guard (blur wajah), rekam manual, statistik `events.csv`, headless mode, HUD FPS.
+
+## Jaminan keamanan & privasi
+
+- ❌ TIDAK mengumpulkan kata sandi, cookie, token, atau private key.
+- ❌ TIDAK mengaktifkan kamera/mikrofon secara tersembunyi, TIDAK keylogging.
+- ✅ Mirroring TIDAK bisa dimulai tanpa pengguna mengetik `SETUJU` (ConsentGate).
+- ✅ Semua sesi ter-audit (`sessions.csv`); pengirim bisa jeda/stop/cabut penonton kapan saja.
+- ✅ Stealth Detector hanya **membaca** (read-only) — untuk mendeteksi, bukan menyembunyikan.
+- ✅ Koneksi dibungkus TLS (sertifikat lab self-signed, hanya untuk perangkat lab).
 
 ## Instalasi
+
 ```bash
 pip install -r requirements.txt
-python webcam_guard.py            # menu interaktif
-python webcam_guard.py --headless # tanpa GUI, log ke CSV
-python webcam_guard.py -c 1 -t 30 # kamera index 1, sensitivitas 30
 ```
 
-## Cara pakai
-Pilih menu 1-7 di terminal. Di jendela kamera: `Q` keluar, `C` ganti kamera, `Z` pilih zona pantauan, `B` toggle blur wajah, `+`/`-` ubah sensitivitas.
-Snapshot → `snapshots/`, rekaman → `recordings/`, log → `events.csv`.
+## Pemakaian
 
-## Konsep yang dipelajari
-- **Background subtraction adaptif** — `cv2.absdiff` + blending 90/10
-- **Thresholding & kontur** — `cv2.findContours`, filtering `MIN_AREA`
-- **Masking ROI (zona pantauan)** — gerakan hanya dihitung dalam zona terpilih
-- **Haar cascade** — deteksi wajah klasik (lebih cepat & ringan dari deep learning, tapi lebih rentan false positive — cocok untuk belajar trade-off)
-- **Privasi by design** — blur wajah otomatis: pelajaran bahwa pengawasan harus menghormati privasi
-- **Event logging & audit** — CSV sebagai audit trail sederhana
-- **Pelajaran keamanan** — akses kamera tidak dijaga OS secara default
+```bash
+# Menu utama (semua fitur):
+python webcam_guard.py
 
-## Roadmap ide
-- Notifikasi Telegram/Discord saat gerakan terdeteksi
-- Face recognition (enrollment wajah pemilik → "wajah dikenal/asing")
-- Deploy headless di Raspberry Pi
+# 1) Bagikan layar (laptop pengirim):
+python mirror_server.py            # tampil kode pairing + token; ketik SETUJU
 
-## Lisensi
-MIT — © 2026 Akmal Putra Septian
+# 2) Menonton (laptop penonton/dosen):
+python mirror_viewer.py XXXX-XXXX --host <ip-pengirim> --role viewer --token <token>
+
+# 3) Stealth Detector (dataset sintetis + folder startup laptop ini, read-only):
+python stealth_sim.py
+python stealth_sim.py --lokal
+```
+
+## Pengujian
+
+```bash
+python -m py_compile *.py
+python -m unittest discover -s tests
+```
+
+Cakupan: format pairing/token (HMAC), persetujuan eksplisit, transisi sesi,
+audit log, protokol wire (length-prefixed), auth HELLO/WELCOME/DENY, kuota
+penonton, jeda/lanjut/stop, pencabutan akses, dan deteksi stealth.
+
+> Catatan jujur: unit test protokol memakai socket polos (`ssl_ctx=None`)
+> untuk menguji logika. Enkripsi TLS asli diuji manual di laptop:
+> server dan viewer saling menolak bila salah satu sisi tidak memakai TLS.
+
+## Struktur
+
+```
+webcam_guard.py        Menu utama (v1.1 + integrasi v1.2)
+mirror_auth.py         Token, role, ConsentGate, audit  (stdlib-only)
+mirror_stream.py       Protokol + TLS + server streaming (stdlib-only)
+mirror_server.py       Entry point pengirim (tangkap layar: mss+cv2)
+mirror_viewer.py       Entry point penonton (tampil frame: cv2)
+stealth_sim.py         Detektor defensif + dashboard indikator
+stealth_dataset.json   Dataset SINTETIS (bukan data nyata)
+tests/                 unittest (auth, stream, stealth)
+```
+
+## Disclaimer
+
+Projek edukasi. Penyalahgunaan terhadap perangkat tanpa izin pemiliknya
+melanggar hukum (UU ITE). Penulis tidak bertanggung jawab atas penyalahgunaan.

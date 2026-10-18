@@ -1,0 +1,31 @@
+{
+  "catatan": "Dataset SINTETIS untuk latihan deteksi di lab keamanan. Tidak ada data, proses, IP, atau aplikasi nyata.",
+  "proses": [
+    {"nama": "chrome.exe", "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "user": "mahasiswa", "cpu": 4.2},
+    {"nama": "code.exe", "path": "C:\\Program Files\\Microsoft VS Code\\code.exe", "user": "mahasiswa", "cpu": 2.7},
+    {"nama": "explorer.exe", "path": "C:\\Windows\\explorer.exe", "user": "mahasiswa", "cpu": 1.1},
+    {"nama": "spotify.exe", "path": "C:\\Users\\mahasiswa\\AppData\\Roaming\\Spotify\\spotify.exe", "user": "mahasiswa", "cpu": 3.5},
+    {"nama": "winlogon.exe", "path": "C:\\Windows\\System32\\winlogon.exe", "user": "SYSTEM", "cpu": 0.1},
+    {"nama": "update_helper.exe", "path": "C:\\Users\\mahasiswa\\AppData\\Local\\Temp\\update_helper.exe", "user": "mahasiswa", "cpu": 0.8},
+    {"nama": "silent_hook.exe", "path": "C:\\Users\\mahasiswa\\AppData\\Local\\Temp\\silent_hook.exe", "user": "mahasiswa", "cpu": 1.9},
+    {"nama": "screen_capture_svc.exe", "path": "C:\\ProgramData\\screen_capture_svc.exe", "user": "SYSTEM", "cpu": 6.4},
+    {"nama": "remote_view_agent.exe", "path": "C:\\ProgramData\\remote_view_agent.exe", "user": "SYSTEM", "cpu": 5.2},
+    {"nama": "keylog_daemon.exe", "path": "C:\\Windows\\System32\\keylog_daemon.exe", "user": "SYSTEM", "cpu": 0.9}
+  ],
+  "koneksi": [
+    {"proses": "chrome.exe", "ip_remote": "142.250.4.100", "port_remote": 443, "status": "ESTABLISHED"},
+    {"proses": "spotify.exe", "ip_remote": "35.186.224.47", "port_remote": 443, "status": "ESTABLISHED"},
+    {"proses": "remote_view_agent.exe", "ip_remote": "203.0.113.7", "port_remote": 4444, "status": "ESTABLISHED"},
+    {"proses": "silent_hook.exe", "ip_remote": "198.51.100.23", "port_remote": 8888, "status": "ESTABLISHED"}
+  ],
+  "persistensi": [
+    {"nama": "steam.lnk", "lokasi": "C:\\Users\\mahasiswa\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\steam.lnk"},
+    {"nama": "silent_hook.exe", "lokasi": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"},
+    {"nama": "screen_capture_svc.desktop", "lokasi": "/home/mahasiswa/.config/autostart/screen_capture_svc.desktop"}
+  ],
+  "izin": [
+    {"aplikasi": "Zoom (simulasi)", "izin": ["kamera", "mikrofon"]},
+    {"aplikasi": "remote_view_agent (simulasi)", "izin": ["kamera", "mikrofon", "layar", "aksesibilitas"]},
+    {"aplikasi": "VS Code (simulasi)", "izin": ["layar"]}
+  ]
+}
