@@ -1,0 +1,26 @@
+# constraints.txt — v2.0
+#
+# Strategi dependensi WebCam Guard:
+# - SELURUH modul inti keamanan/lab adalah STDLIB-ONLY (tidak butuh
+#   instalasi apa pun): audit_core, forensics, netmon, credcheck,
+#   redsim, stealth_sim, lab_status, mirror_stream/auth/server/viewer,
+#   privacy, evidence, posture, fuzz_lab, webcam_guard (menu lab).
+# - Satu-satunya dependensi pihak ketiga: opencv-python untuk fitur
+#   kamera (menu 1-4, 6) — opsional; tanpa cv2 program tetap jalan.
+# - 'cryptography' HANYA untuk generate sertifikat TLS lokal
+#   (mirror_stream.ensure_cert); alternatif: openssl CLI.
+#
+# Scan kerentanan (JALANKAN DI LAPTOP OWNER; di CI lab NOT RUN):
+#   pip install pip-audit
+#   pip-audit -r requirements.txt
+#
+# CATATAN JUJUR: lingkungan build ini tidak memiliki akses pip jadi
+# scan TIDAK DIJALANKAN di sini — posture.py (P-15) melaporkannya
+# sebagai PERINGAT/NOT RUN, bukan "aman".
+#
+# SBOM: bila tersedia, generate dengan
+#   cyclonedx-py requirements -o sbom.json   (CycloneDX)
+# Hasil SBOM saat ini: NOT GENERATED (alat tidak tersedia di lab).
+
+opencv-python==4.10.0.84
+cryptography==43.0.3

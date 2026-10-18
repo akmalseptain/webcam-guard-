@@ -1,4 +1,12 @@
-opencv-python>=4.8
-numpy>=1.24
-mss>=9.0
-cryptography>=42
+# requirements.txt — WebCam Guard v2.0
+#
+# Inti lab (netmon/credcheck/redsim/forensics/audit/evidence/privacy/
+# posture/fuzz/mirror) 100% stdlib — file ini HANYA untuk fitur
+# opsional. Lihat constraints.txt untuk strategi versi + scan.
+#
+# Fitur kamera (menu 1-4, 6): motion detection, face blur, rekaman.
+# Tanpa cv2, program tetap jalan (fitur kamera dinonaktifkan aman).
+opencv-python==4.10.0.84
+# Generate sertifikat TLS self-signed untuk mirror lokal
+# (alternatif: openssl CLI). Tanpa ini gunakan sertifikat milik sendiri.
+cryptography==43.0.3

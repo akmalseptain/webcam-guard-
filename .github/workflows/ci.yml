@@ -1,0 +1,91 @@
+# CI — WebCam Guard v2.0 (stdlib-only; tanpa pip install)
+#
+# Release gate: job GAGAL bila kompilasi, unit/integration test, fuzz,
+# atau posture check gagal. Fitur kamera (OpenCV) tidak diuji di CI —
+# hardware-dependent, diuji manual di laptop owner (lihat README).
+#
+# Keamanan job:
+# - permissions: contents: read SAJA (tanpa token berbahaya)
+# - TIDAK ada credential rahasia di source
+# - artefak runtime (lab_*.jsonl, evidence_pack/, dst.) TIDAK di-commit
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Siapkan Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 1) Syntax check seluruh modul
+      - name: Kompilasi (py_compile semua modul)
+        run: |
+          python3 -m compileall -q webcam_guard.py audit_core.py \
+            forensics.py netmon.py credcheck.py redsim.py stealth_sim.py \
+            lab_status.py mirror_auth.py mirror_stream.py mirror_server.py \
+            mirror_viewer.py privacy.py evidence.py posture.py fuzz_lab.py
+          echo "compileall OK"
+
+      # 2) Unit + integration + regresi (discover otomatis)
+      - name: Suite test penuh
+        run: |
+          python3 -m unittest discover -s tests -v
+
+      # 3) Fuzz deterministik (dua seed — harus 0 crash)
+      - name: Fuzz lab (seed 42 & 7)
+        run: |
+          python3 fuzz_lab.py --seed 42
+          python3 fuzz_lab.py --seed 7
+
+      # 4) Smoke test CLI tiap modul lab
+      - name: Netmon demo + evaluasi detektor
+        run: |
+          python3 netmon.py --demo
+          python3 netmon.py --evaluasi
+
+      - name: Redsim — target in-scope & out-of-scope (exit 2)
+        run: |
+          python3 redsim.py --target lab-01.local
+          python3 redsim.py --target 8.8.8.8 && { echo "HARUSNYA DITOLAK"; exit 1; } || [ $? -eq 2 ]
+
+      - name: Forensics + anchor checkpoint
+        run: |
+          python3 forensics.py --checkpoint
+
+      - name: Evidence build + verify (read-only)
+        run: |
+          python3 evidence.py --build --events lab_events.jsonl --audit lab_audit.jsonl
+          python3 evidence.py --verify
+
+      - name: Privacy ringkasan (dry-run, tanpa hapus)
+        run: |
+          python3 privacy.py
+
+      # 5) Security posture — TIDAK BOLEH ada bloker GAGAL-KRITIS
+      - name: Posture engine (gate release)
+        run: |
+          python3 posture.py
+
+      # Catatan jujur: dependency scan (pip-audit) TIDAK dijalankan di CI
+      # ini karena modul inti stdlib-only dan requirements hanya untuk
+      # fitur kamera opsional. Jalankan manual:
+      #   pip install pip-audit && pip-audit -r requirements.txt
+      # posture.py (P-15) akan tetap melaporkannya sebagai NOT RUN.

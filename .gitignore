@@ -21,3 +21,11 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+
+# v2.0 — artefak runtime baru
+*.anchor.json
+evidence_pack/
+privacy_events.jsonl
+posture_report.json
+evidence_export/
+*.lock

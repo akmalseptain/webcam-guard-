@@ -6,28 +6,43 @@ import sys
 import time
 from datetime import datetime
 
-import cv2
+# v2.0: OpenCV kini OPSIONAL — modul lab (netmon/credcheck/redsim/
+# forensics/audit/evidence/privacy/posture/fuzz) 100% stdlib dan tetap
+# jalan meski cv2 tidak terpasang.
+try:
+    import cv2
+    CV2_READY = True
+except ImportError:
+    cv2 = None
+    CV2_READY = False
+
+# v2.0: selalu bekerja dari direktori modul ini, agar CLI bisa dijalankan
+# dari luar root repo (jalur relatif recordings/ dan lab_* tetap benar).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(BASE_DIR)
 
 # ============================================================
-#  WebCam Guard v1.3 — Advanced Cybersecurity Lab Edition
-#  Fitur baru vs v1.2 (submenu "A. Lab Lanjutan"):
-#   - netmon   : analisis PCAP + metadata DNS/SNI/HTTP + deteksi
-#                anomali (port C2, port scan, beaconing) — metadata-only
-#   - credcheck: asesmen keamanan kredensial 100% SINTETIS (masked)
-#   - redsim   : emulasi red team TERKUNCI lab_scope.json (MITRE ATT&CK)
-#   - forensics: timeline + korelasi event + bukti hash-chain
-#   - lab_status: dashboard teks status lab
-#   - audit_core: RBAC + PBKDF2 + rate limiter + audit tamper-evident
+#  WebCam Guard v2.0 — Hardened Lab Edition
+#  Perubahan besar vs v1.3 (detail: docs/V2.0-SECURITY.md):
+#   - audit_core : flock + seq + anchor checkpoint (anti-truncation),
+#                  PBKDF2 param validation, limiter reset, anti-enum
+#   - forensics  : anchor + verify terhadap checkpoint
+#   - netmon     : deteksi explainable + evaluasi berlabel (precision/
+#                  recall), guard PCAP raksasa, capture butuh --confirm-scope
+#   - mirror_*   : TLS pinning (SHA-256 DER), token 256-bit, rate limit
+#                  per-IP + lockout, STOP admin-only, antrian bounded
+#   - redsim     : CLI --target (out-of-scope -> exit 2 + audit)
+#   - credcheck  : mask kebijakan "ketat" (tanpa potongan awal/akhir)
+#   - privacy    : retensi rekaman + izin file + fail-safe blur
+#   - evidence   : paket bukti forensik verifiable (manifest SHA-256)
+#   - posture    : security posture engine (cek behavioral)
+#   - fuzz_lab   : fuzzing deterministik (PCAP/JSONL/wire/auth)
 #
-#  Fitur v1.2:
-#   - Mirror Server: bagikan layar ke penonton lab DENGAN
-#     persetujuan eksplisit + kode pairing/token + TLS + audit
-#   - Stealth Detector: kenali jejak aplikasi pemantauan
-#     tersembunyi dari dataset sintetis (defensif, read-only)
-#
-#  Fitur v1.1: deteksi wajah + blur, zona pantauan (ROI),
-#   multi-kamera, log kejadian (events.csv), headless mode,
-#   sensitivitas realtime, counter FPS + HUD status.
+#  Fitur v1.3: netmon, credcheck, redsim, forensics, lab_status, audit_core
+#  Fitur v1.2: Mirror Server (persetujuan eksplisit + TLS + audit),
+#              Stealth Detector (defensif, dataset sintetis)
+#  Fitur v1.1: deteksi wajah + blur, zona pantauan, multi-kamera,
+#              events.csv, headless mode, FPS + HUD
 #
 #  HANYA untuk perangkat milik sendiri / lab yang diotorisasi
 #  (edukasi, diawasi dosen). Tidak menyembunyikan proses dan
@@ -45,9 +60,32 @@ RECORD_COOLDOWN = 3.0   # detik jeda antar rekaman otomatis
 STILL_FRAMES_STOP = 60  # frame tanpa gerakan sebelum rekaman berhenti
 FACE_DEDUP_COOLDOWN = 10.0  # detik jeda antar event "wajah terdeteksi"
 
-# Haar cascade bawaan OpenCV (wajah depan)
-FACE_CASCADE = cv2.CascadeClassifier(
-    cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+# v2.0: Haar cascade dimuat LAZY (bukan saat import) supaya modul bisa
+# di-import tanpa cv2/cascade (mis. di CI atau mesin tanpa GUI).
+FACE_CASCADE = None
+
+
+def _muat_cascade():
+    """Lazy-load Haar cascade; kembalikan None bila tidak tersedia."""
+    global FACE_CASCADE
+    if FACE_CASCADE is None and CV2_READY:
+        cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        if cascade is None or cascade.empty():
+            return None
+        FACE_CASCADE = cascade
+    return FACE_CASCADE
+
+
+def _butuh_cv2(fitur):
+    """Guard fitur kamera: tolak dengan pesan jelas bila OpenCV absen."""
+    if CV2_READY:
+        return True
+    print(f"  [!] Fitur '{fitur}' membutuhkan OpenCV (cv2) yang belum terpasang.")
+    print("      Instal dengan: pip install opencv-python")
+    print("      Modul lab (menu A) tetap bisa dijalankan tanpa OpenCV.")
+    log_event("fitur_skip", f"{fitur}: cv2 tidak tersedia")
+    return False
 
 
 # ------------------------------------------------------------
@@ -111,6 +149,8 @@ def list_cameras(max_index=5):
 
 def security_check():
     """Tes akses kamera — bukti program biasa bisa buka kamera tanpa peringatan."""
+    if not _butuh_cv2("Tes akses kamera"):
+        return
     print("\n[?] Menguji akses kamera...")
     cams = list_cameras()
     if not cams:
@@ -159,6 +199,8 @@ def open_camera(index):
 # Mode 1: Live view (C = ganti kamera)
 # ------------------------------------------------------------
 def live_view(camera_index=0):
+    if not _butuh_cv2("Live view"):
+        return
     cap = open_camera(camera_index)
     if cap is None:
         return
@@ -195,6 +237,8 @@ def live_view(camera_index=0):
 # Mode 2: Deteksi gerakan + zona pantauan
 # ------------------------------------------------------------
 def motion_detection(camera_index=0, headless=False, threshold=25):
+    if not _butuh_cv2("Deteksi gerakan"):
+        return
     cap = open_camera(camera_index)
     if cap is None:
         return
@@ -331,7 +375,19 @@ def np_zero_like(img):
 # Mode baru: Deteksi wajah + blur privasi
 # ------------------------------------------------------------
 def face_guard(camera_index=0):
-    """Deteksi wajah (Haar cascade); tekan B untuk blur wajah (privasi)."""
+    """Deteksi wajah (Haar cascade); tekan B untuk blur wajah (privasi).
+
+    v2.0 fail-safe: bila cv2 ATAU cascade tidak tersedia, tolak dengan
+    pesan jelas — JANGAN tampilkan frame tanpa blur (privasi dulu).
+    """
+    if not _butuh_cv2("Face Guard"):
+        return
+    cascade = _muat_cascade()
+    if cascade is None:
+        print("  [!] Haar cascade wajah tidak ditemukan — Face Guard berhenti")
+        print("      (fail-safe: frame TIDAK ditampilkan tanpa jaminan blur).")
+        log_event("face_guard_skip", "cascade tidak tersedia (fail-safe)")
+        return
     cap = open_camera(camera_index)
     if cap is None:
         return
@@ -348,7 +404,7 @@ def face_guard(camera_index=0):
         prev = now
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = FACE_CASCADE.detectMultiScale(
+        faces = cascade.detectMultiScale(
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
         n_wajah = 0
@@ -389,6 +445,8 @@ def face_guard(camera_index=0):
 # Mode 3: Rekam manual
 # ------------------------------------------------------------
 def manual_record(camera_index=0, seconds=10):
+    if not _butuh_cv2("Rekam manual"):
+        return
     cap = open_camera(camera_index)
     if cap is None:
         return
@@ -427,26 +485,40 @@ def _python_exe():
 
 
 def lab_lanjutan():
-    """Submenu Laboratorium Lanjutan (v1.3) — semua modul stdlib-only."""
+    """Submenu Laboratorium Lanjutan — semua modul stdlib-only (v2.0)."""
     while True:
-        print("\n---------- LAB LANJUTAN (v1.3) ----------")
+        print("\n---------- LAB LANJUTAN (v2.0) ----------")
         print("1. netmon — demo analisis paket sintetis")
         print("2. netmon — live capture (butuh tcpdump/tshark/dumpcap)")
         print("3. credcheck — asesmen kredensial (100% sintetis)")
         print("4. redsim — emulasi red team (scope-enforced)")
         print("5. forensics — timeline + korelasi + laporan")
         print("6. lab_status — dashboard status lab")
+        print("7. posture — security posture engine")
+        print("8. evidence — paket bukti forensik (build/verify)")
+        print("9. privacy — retensi & izin rekaman (dry-run)")
         print("0. Kembali ke menu utama")
-        pilih = input("Pilih [0-6]: ").strip()
+        pilih = input("Pilih [0-9]: ").strip()
         exe = _python_exe()
         if pilih == "1":
             subprocess.run([exe, "netmon.py", "--demo"])
         elif pilih == "2":
             iface = input("Antarmuka lab (mis. eth0): ").strip() or "eth0"
             menit = input("Durasi menit [1]: ").strip() or "1"
-            subprocess.run([exe, "netmon.py", "--capture-iface", iface,
-                            "--minutes", menit, "--save-pcap",
-                            "captures/lab_capture.pcap"])
+            # v2.0: live capture BUTUH konfirmasi scope eksplisit —
+            # tanpa itu netmon menolak (fail-closed, by design).
+            setuju = input(
+                f"Konfirmasi capture '{iface}' ada DI DALAM scope lab "
+                "(lab_scope.json)? [y/T]: ").strip().lower()
+            cmd = [exe, "netmon.py", "--capture-iface", iface,
+                   "--minutes", menit, "--save-pcap",
+                   "captures/lab_capture.pcap"]
+            if setuju == "y":
+                cmd.append("--confirm-scope")
+            else:
+                print("  [!] Tanpa konfirmasi, netmon akan MENOLAK capture "
+                      "(fail-closed).")
+            subprocess.run(cmd)
         elif pilih == "3":
             subprocess.run([exe, "credcheck.py"])
         elif pilih == "4":
@@ -455,6 +527,18 @@ def lab_lanjutan():
             subprocess.run([exe, "forensics.py"])
         elif pilih == "6":
             subprocess.run([exe, "lab_status.py"])
+        elif pilih == "7":
+            subprocess.run([exe, "posture.py"])
+        elif pilih == "8":
+            print("  [*] evidence: build paket dari lab_events.jsonl +"
+                  " lab_audit.jsonl, lalu verify (read-only).")
+            subprocess.run([exe, "evidence.py", "--build",
+                            "--events", "lab_events.jsonl",
+                            "--audit", "lab_audit.jsonl"])
+            subprocess.run([exe, "evidence.py", "--verify"])
+        elif pilih == "9":
+            subprocess.run([exe, "privacy.py"])
+            print("  [*] Hapus dengan: python privacy.py --bersihkan (dry-run dulu)")
         elif pilih == "0":
             return
         else:
@@ -464,10 +548,14 @@ def lab_lanjutan():
 def petunjuk_viewer():
     """Petunjuk menjalankan penonton di laptop kedua (lab)."""
     print("\n[i] ===== Mirror Viewer (laptop penonton) =====")
-    print("  1. Dari pengirim (menu 8): salin KODE PAIRING + TOKEN (admin/viewer).")
+    print("  1. Dari pengirim (menu 8): salin KODE PAIRING + TOKEN (admin/viewer)")
+    print("     dan FINGERPRINT sertifikat (SHA-256) yang dicetak server.")
     print("  2. Di laptop penonton, jalankan:")
-    print("       python mirror_viewer.py KODE-PAIRING --host <ip-pengirim> --role viewer --token TOKEN")
-    print("  3. Kontrol penonton: p=jeda, r=lanjut, s=minta stop, q=keluar.")
+    print("       python mirror_viewer.py KODE-PAIRING --host <ip-pengirim> \\")
+    print("         --role viewer --token TOKEN --pin <fingerprint>")
+    print("     (--pin WAJIB di v2.0: koneksi ditolak bila fingerprint")
+    print("      server tidak cocok — trust-on-first-use dilarang).")
+    print("  3. Kontrol penonton: p=jeda, r=lanjut, s=minta stop (admin), q=keluar.")
     print("  4. Pengirim bisa jeda/stop/mencabut penonton kapan saja;")
     print("     semua sesi tercatat di sessions.csv pada sisi pengirim.")
     input("\nTekan Enter untuk kembali ke menu...")
@@ -475,7 +563,7 @@ def petunjuk_viewer():
 
 def menu(camera_index):
     while True:
-        print("\n========== WebCam Guard v1.3 ==========")
+        print("\n========== WebCam Guard v2.0 ==========")
         print("1. Live view kamera")
         print("2. Deteksi gerakan (zona + auto rekam)")
         print("3. Face Guard (deteksi wajah + blur privasi)")
@@ -485,7 +573,8 @@ def menu(camera_index):
         print("7. Stealth Detector (simulasi defensif, dataset sintetis)")
         print("8. Mirror Server (bagikan layar dgn persetujuan eksplisit)")
         print("9. Petunjuk Mirror Viewer (untuk laptop penonton)")
-        print("A. Lab Lanjutan (netmon/credcheck/redsim/forensics/status)")
+        print("A. Lab Lanjutan (netmon/credcheck/redsim/forensics/posture/"
+              "evidence/privacy)")
         print("0. Keluar")
         pilih = input("Pilih menu [0-9A]: ").strip()
 
@@ -522,16 +611,23 @@ def menu(camera_index):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WebCam Guard v1.3 — pengawasan webcam lokal + lab "
-                    "mirroring (persetujuan eksplisit) + stealth detector "
-                    "defensif + lab lanjutan (netmon/credcheck/redsim/"
-                    "forensics)")
+        description="WebCam Guard v2.0 — pengawasan webcam lokal + lab "
+                    "mirroring (TLS pinning + persetujuan eksplisit) + "
+                    "stealth detector defensif + lab lanjutan hardened "
+                    "(netmon/credcheck/redsim/forensics/posture/evidence/"
+                    "privacy)")
     parser.add_argument("-c", "--camera", type=int, default=0, help="index kamera (default: 0)")
     parser.add_argument("--headless", action="store_true", help="mode tanpa GUI: log gerakan ke CSV saja")
     parser.add_argument("-t", "--threshold", type=int, default=25, help="sensitivitas deteksi gerakan 5-100 (default: 25)")
     args = parser.parse_args()
 
+    if not CV2_READY:
+        print("[i] OpenCV (cv2) tidak terpasang — fitur kamera (menu 1-4, 6) "
+              "nonaktif; modul lab (menu A) tetap tersedia.")
+
     if args.headless:
+        if not _butuh_cv2("Mode headless"):
+            sys.exit(3)
         log_event("start_headless", f"kamera={args.camera}")
         motion_detection(args.camera, headless=True, threshold=args.threshold)
     else:
