@@ -29,7 +29,8 @@ def _muat_json(path):
 
 def render(scope_path="lab_scope.json", events_path="lab_events.jsonl",
            audit_path="lab_audit.jsonl", cred_path="cred_report.json",
-           captures_dir="captures"):
+           captures_dir="captures", devices_path="devices.json",
+           operators_path="operators.json"):
     # fallback: file konfigurasi scope juga dicari di sebelah modul ini
     if not os.path.exists(scope_path):
         kandidat = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -98,7 +99,30 @@ def render(scope_path="lab_scope.json", events_path="lab_events.jsonl",
     else:
         baris.append(" Capture         : (folder captures/ belum ada)")
 
-    # 6) audit terakhir
+    # 6) range v3.0 — perangkat ter-enroll & operator (read-only JSON)
+    devs = _muat_json(devices_path)
+    if devs and isinstance(devs.get("devices"), dict):
+        semua = devs["devices"]
+        aktif = [d for d, r in semua.items() if not r.get("revoked")]
+        lock = "AKTIF — semua perangkat ditolak" if devs.get("lockdown") \
+            else "tidak"
+        baris.append(f" Range devices  : {len(semua)} ter-enroll "
+                     f"({len(aktif)} aktif) | lockdown: {lock}")
+        rev = [d for d, r in semua.items() if r.get("revoked")]
+        if rev:
+            baris.append(f"   revoked       : {', '.join(sorted(rev))}")
+    else:
+        baris.append(" Range devices  : (belum ada — "
+                     "python3 range_registry.py --enroll <nama>)")
+    ops = _muat_json(operators_path)
+    if ops and isinstance(ops.get("users"), dict):
+        baris.append(f" Range operators : {len(ops['users'])} akun "
+                     f"({', '.join(sorted(ops['users']))})")
+    else:
+        baris.append(" Range operators : (belum ada — "
+                     "python3 range_controller.py --init-admin <pw>)")
+
+    # 7) audit terakhir
     if n_audit:
         terakhir = audit.entries()[-3:]
         baris.append(" Audit terakhir:")
@@ -113,7 +137,8 @@ def render(scope_path="lab_scope.json", events_path="lab_events.jsonl",
 
 def main():
     ap = argparse.ArgumentParser(
-        description="lab_status v1.3 (lab) — dashboard teks status lab.")
+        description="lab_status v3.0 (lab) — dashboard teks status lab "
+                    "(+ baris range: devices/operators).")
     args = ap.parse_args()
     print(render())
 

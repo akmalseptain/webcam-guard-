@@ -29,3 +29,9 @@ privacy_events.jsonl
 posture_report.json
 evidence_export/
 *.lock
+
+# v3.0 — artefak runtime range (KREDENSIAL: kunci perangkat & hash
+# password operator TIDAK boleh masuk repo)
+devices.json
+operators.json
+

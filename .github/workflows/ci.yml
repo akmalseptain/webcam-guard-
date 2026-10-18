@@ -41,7 +41,9 @@ jobs:
           python3 -m compileall -q webcam_guard.py audit_core.py \
             forensics.py netmon.py credcheck.py redsim.py stealth_sim.py \
             lab_status.py mirror_auth.py mirror_stream.py mirror_server.py \
-            mirror_viewer.py privacy.py evidence.py posture.py fuzz_lab.py
+            mirror_viewer.py privacy.py evidence.py posture.py fuzz_lab.py \
+            range_registry.py range_controller.py range_agent.py \
+            range_scenarios.py range_report.py
           echo "compileall OK"
 
       # 2) Unit + integration + regresi (discover otomatis)
@@ -78,6 +80,41 @@ jobs:
       - name: Privacy ringkasan (dry-run, tanpa hapus)
         run: |
           python3 privacy.py
+
+      # 4b) Range v3.0 — registry, scenario engine (scope-enforced),
+      # laporan before/after. Artefak ditulis ke /tmp (bukan repo).
+      - name: Range registry — enroll + list (artefak /tmp)
+        run: |
+          mkdir -p /tmp/range-ci
+          python3 range_registry.py --file /tmp/range-ci/devices.json \
+            --audit /tmp/range-ci/audit.jsonl --enroll ci-vm-01 \
+            --peran operator | grep -q "ENROLL OK"
+          python3 range_registry.py --file /tmp/range-ci/devices.json \
+            --audit /tmp/range-ci/audit.jsonl | grep -q "ci-vm-01"
+
+      - name: Range scenarios — fixture loopback (in-scope) vs produksi (ditolak)
+        run: |
+          python3 range_scenarios.py --scope tests/scope_loopback.json \
+            --events /tmp/range-ci/events.jsonl --audit /tmp/range-ci/audit.jsonl \
+            | tee /tmp/range-ci/skenario.txt
+          grep -q "detection_rate: 1.0" /tmp/range-ci/skenario.txt
+          set +e
+          python3 range_scenarios.py --scope lab_scope.json \
+            --events /tmp/range-ci/events2.jsonl --audit /tmp/range-ci/audit2.jsonl \
+            > /tmp/range-ci/skenario2.txt
+          KODE=$?
+          set -e
+          grep -q "DITOLAK_SCOPE" /tmp/range-ci/skenario2.txt
+          [ "$KODE" -eq 2 ]
+
+      - name: Range report — before/after (jujur: tanpa klaim angka test)
+        run: |
+          python3 range_report.py --jalankan-netmon
+
+      # Catatan jujur: range_agent + range_controller butuh pasangan
+      # socket hidup (enrollment kunci nyata, out-of-band) — diuji oleh
+      # tests/test_range_controller_agent.py (42 test socket loopback),
+      # TIDAK oleh smoke CLI ini.
 
       # 5) Security posture — TIDAK BOLEH ada bloker GAGAL-KRITIS
       - name: Posture engine (gate release)
