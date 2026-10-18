@@ -24,7 +24,7 @@ class TestNormalize(unittest.TestCase):
             forensics.normalize("trojan", "x")
 
     def test_delapan_kind_lengkap(self):
-        self.assertEqual(len(forensics.KINDS), 8)
+        self.assertEqual(len(forensics.KINDS), 9)  # v4.0: + "slc"
         for k in forensics.KINDS:
             e = forensics.normalize(k, "tes")
             self.assertEqual(e["kind"], k)

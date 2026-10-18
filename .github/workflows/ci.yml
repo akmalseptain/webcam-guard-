@@ -1,8 +1,10 @@
-# CI — WebCam Guard v2.0 (stdlib-only; tanpa pip install)
+# CI — WebCam Guard v4.0 (stdlib-only; tanpa pip install)
 #
 # Release gate: job GAGAL bila kompilasi, unit/integration test, fuzz,
 # atau posture check gagal. Fitur kamera (OpenCV) tidak diuji di CI —
 # hardware-dependent, diuji manual di laptop owner (lihat README).
+# Instalasi layanan Windows (sc.exe) tidak diuji di CI — prosedur
+# terdokumentasi di docs/SLC-INSTALL-DEMO.md.
 #
 # Keamanan job:
 # - permissions: contents: read SAJA (tanpa token berbahaya)
@@ -43,7 +45,10 @@ jobs:
             lab_status.py mirror_auth.py mirror_stream.py mirror_server.py \
             mirror_viewer.py privacy.py evidence.py posture.py fuzz_lab.py \
             range_registry.py range_controller.py range_agent.py \
-            range_scenarios.py range_report.py
+            range_scenarios.py range_report.py \
+            slc_actions.py slc_control.py slc_server.py slc_endpoint.py \
+            slc_mission.py slc_events.py slc_redblue.py slc_twin.py \
+            slc_remediation.py slc_ui.py slc_demo.py
           echo "compileall OK"
 
       # 2) Unit + integration + regresi (discover otomatis)
@@ -110,6 +115,34 @@ jobs:
       - name: Range report — before/after (jujur: tanpa klaim angka test)
         run: |
           python3 range_report.py --jalankan-netmon
+
+      # 4c) SLC v4.0 — action registry, mission engine, demo sintetis
+      # berlabel, laporan acceptance. Semua artefak ke /tmp (bukan repo).
+      - name: SLC action registry — daftar + tolak aksi tak dikenal
+        run: |
+          mkdir -p /tmp/slc-ci
+          python3 slc_actions.py --daftar | grep -q "asesmen_keamanan"
+          set +e
+          python3 slc_actions.py --jalankan aksi_tidak_ada 2> /tmp/slc-ci/tolak.txt
+          KODE_AKSI=$?
+          set -e
+          grep -q "aksi tidak dikenal" /tmp/slc-ci/tolak.txt
+          [ "$KODE_AKSI" -ne 0 ]
+
+      - name: SLC demo mode — perangkat sintetis berlabel
+        run: |
+          python3 slc_demo.py --demo | grep -q "SINTETIS-DEMO"
+
+      - name: SLC acceptance report — suite penuh harus hijau
+        run: |
+          python3 slc_demo.py --evaluasi --tulis /tmp/slc-ci/acceptance.md
+          grep -q "SEMUA LULUS" /tmp/slc-ci/acceptance.md
+
+      # Catatan jujur: transport TLS nyata (slc_server/slc_endpoint antar-host)
+      # dan instalasi layanan Windows SC.exe TIDAK diuji smoke ini — butuh
+      # sertifikat + PC Windows fisik; perilakunya diuji oleh
+      # tests/test_slc_endpoint.py (loopback; 3 test TLS di-skip tanpa
+      # sertifikat) dan prosedur di docs/SLC-INSTALL-DEMO.md.
 
       # Catatan jujur: range_agent + range_controller butuh pasangan
       # socket hidup (enrollment kunci nyata, out-of-band) — diuji oleh

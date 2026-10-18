@@ -1,12 +1,23 @@
-# WebCam Guard v3.0 — Cyber Range & Security Lab Edition
+# WebCam Guard v4.0 — Sovereign Lab Control (Cyber War Room Edition)
 
 Proyek pembelajaran keamanan siber (diawasi dosen, Universitas Indonesia).
 **Hanya untuk perangkat milik sendiri / lab yang diotorisasi.**
+
+v4.0 menambahkan **Sovereign Lab Control (SLC)** di atas v3.0: control plane
+terpusat multi-PC lab (enroll/revokasi/policy/antrean tugas/emergency stop),
+endpoint agent Windows (`SLCAgent` — layanan identitas jelas), action registry
+eksplisit 10 aksi, mission engine otonom terbatas (7 state + verifikasi
+postcondition), event pipeline berlabel asal-data, evaluasi RED/BLUE,
+digital twin + what-if, remediasi 12 langkah dengan rollback, dan Horror
+Command Center TUI — plus mode DEMO sintetis berlabel untuk UTS.
 
 v3.0 menambahkan lapisan **cyber range** di atas v2.0: enrollment perangkat
 kriptografis, controller ter-autentikasi, endpoint agent read-only, scenario
 engine scope-enforced, dan laporan before/after. Dokumentasi utama:
 
+- [`docs/SLC-ARCHITECTURE-v4.0.md`](docs/SLC-ARCHITECTURE-v4.0.md) — arsitektur v4.0: 11 modul `slc_*`, alur pesan HMAC+nonce, batas keamanan, integrasi modul lama tanpa duplikasi.
+- [`docs/SLC-INSTALL-DEMO.md`](docs/SLC-INSTALL-DEMO.md) — instalasi (layanan Windows `SLCAgent`, port 9443, TLS/pin), mode FISIK vs DEMO, 11 langkah demo UTS, uninstall.
+- [`docs/SLC-ACCEPTANCE-v4.0.md`](docs/SLC-ACCEPTANCE-v4.0.md) — laporan acceptance v4.0 (digenerate dari suite nyata; bagian "tidak dapat dijalankan" dijujuri).
 - [`docs/RANGE-SECURITY-v3.0.md`](docs/RANGE-SECURITY-v3.0.md) — desain keamanan range v3.0: identitas perangkat 256-bit, RBAC persisten, whitelist perintah, anti-replay, batas model ancaman.
 - [`docs/RANGE-AUDIT-v2.0.md`](docs/RANGE-AUDIT-v2.0.md) — audit baseline v2.0 sebelum range (temuan B-01..B-10, pemetaan 20 kapabilitas vs master prompt).
 - [`docs/RANGE-REPORT-v3.0.md`](docs/RANGE-REPORT-v3.0.md) — laporan perbandingan SEBELUM vs SESUDAH (angka hasil ukur nyata, kriteria K1..K5).
@@ -14,7 +25,23 @@ engine scope-enforced, dan laporan before/after. Dokumentasi utama:
 - [`docs/RISK-MATRIX.md`](docs/RISK-MATRIX.md) — pemetaan risiko → kontrol → test (test-to-risk mapping), perilaku yang belum diuji, risiko sisa.
 - [`docs/AUDIT-v1.3.md`](docs/AUDIT-v1.3.md) — audit teknis v1.3 (temuan K-01..K-10, hasil uji nyata, batasan, roadmap).
 
-## Fitur v3.0 (baru — lapisan cyber range)
+## Fitur v4.0 (baru — Sovereign Lab Control)
+
+| Fitur | File | Inti |
+|---|---|---|
+| Control plane terpusat | `slc_control.py` | Enroll/revoke per perangkat, grup/tag/policy, antrean tugas per-dev dengan idempotensi + kedaluwarsa, persetujuan aksi TINGGI, emergency stop per-dev, inventaris + detail perangkat (kesehatan/tugas/alert), audit tiap operasi admin |
+| Server transport | `slc_server.py` | TCP (default 127.0.0.1:9443, TLS opsional), whitelist pesan HEARTBEAT/POLL/HASIL/BYE, verifikasi HMAC+nonce — perangkat yang sekadar reachable TIDAK dianggap berizin |
+| Endpoint agent Windows | `slc_endpoint.py` | Enrollment eksplisit, heartbeat + backoff terbatas 0,5→30 dtk, graceful shutdown, limit memori, deploy paket cek sha256 + `.bak`, layanan `SLCAgent` identitas jelas (sc.exe; tidak menyamar komponen Windows; uninstall bebas), TLS pin sha256 + CERT_REQUIRED |
+| Action registry eksplisit | `slc_actions.py` | 10 aksi (kesehatan/eventlog/proses_meta/disk/cek_keamanan/bundel_diagnostik/cek_app/restart_layanan/deploy_paket/asesmen_keamanan): skema input ketat, timeout, limit keluaran, verifikasi postcondition, rollback metadata; aksi/param tak dikenal DITOLAK default |
+| Mission engine otonom | `slc_mission.py` | REQUESTED→AUTHORIZATION_CHECK→PLANNED→APPROVAL→EXECUTING→VERIFYING→REPORTING; APPROVAL dilewati hanya bila semua aksi RENDAH + persetujuan kebijakan; gelombang DAG paralel, retry terbatas, deadline + budget, checkpoint, verifikasi dependensi sukses (bukan sekadar exit 0), rollback, analisis kegagalan, laporan teks+JSON |
+| Event pipeline | `slc_events.py` | Normalisasi dengan label ASAL WAJIB (telemetri/sintetis/replay/inferensi), dedup, retensi, cari/filter, alert threshold, korelasi perangkat+misi, perbandingan historis — TIDAK_ADA_DATA tidak pernah dianggap bukti aman |
+| Evaluasi RED/BLUE | `slc_redblue.py` | Matriks RB-01..RB-04 (T1046/T1071/T1547.001/T1078, semua sintetis ter-scope) via `redsim`; sisi BLUE precision/recall/FPR via `netmon`; analisis FP; perbandingan konfigurasi baseline→improved (yang tak diukur dinyatakan) |
+| Digital twin + what-if | `slc_twin.py` | Model endpoint/layanan/dependensi (dependensi WAJIB bukti; asumsi dilabeli), temuan + confidence 0..1, sejarah perubahan; `what_if("matikan_layanan")` → dampak/asumsi/informasi-kurang/usulan-uji — simulasi TIDAK menyentuh perangkat fisik |
+| Remediasi 12 langkah | `slc_remediation.py` | Temuan→bukti→proposal→risiko→inspeksi diff→tes→persetujuan→checkpoint→terapkan→verifikasi→rollback→catat; zona larangan (kebijakan keamanan/akun/firewall/konfigurasi kritis) WAJIB `recovery_plan` tertulis |
+| Horror Command Center | `slc_ui.py` | Persona "SANG PENJAGA" + frame horor severity-driven yang SELALU menyatakan "administrasi jarak jauh — BUKAN tersembunyi", tombol EMERGENCY STOP selalu tampil, peta lab, grafik aktivitas, timeline jujur (TIDAK ADA DATA), misi replay, investigasi insiden, dasbor; kontrol gerak-minim/bisu/mode-polos |
+| Mode DEMO UTS | `slc_demo.py` | 3 perangkat SINTETIS berlabel `SINTETIS-DEMO (bukan perangkat nyata)`, misi inventaris end-to-end, `--evaluasi` laporan acceptance; tidak pernah memalsukan perangkat/hasil/alert |
+
+## Fitur v3.0 (tetap — lapisan cyber range)
 
 | Fitur | File | Inti |
 |---|---|---|
@@ -67,7 +94,8 @@ zona ROI + auto rekam, Face Guard (blur wajah), rekam manual, statistik `events.
 - ✅ Privacy Guard: retensi + izin file 0600 + kebijakan fail-closed bila blur gagal.
 - ✅ Range: perangkat TANPA enrollment ditolak controller; tugas agent read-only whitelist (tanpa eksekusi arbitrer); operator non-admin DITOLAK + diaudit; pesan di-replay DITOLAK (nonce sekali-pakai); lockdown darurat satu switch.
 - ✅ Skenario range terkunci scope (`tests/scope_loopback.json` untuk uji loopback; `lab_scope.json` untuk lab sungguhan) — out-of-scope → DITOLAK_SCOPE + audit + exit 2.
-- ✅ Semua klaim keamanan punya test regresi otomatis (lihat `docs/RISK-MATRIX.md` dan `docs/RANGE-SECURITY-v3.0.md`).
+- ✅ SLC v4.0: aksi tak terdaftar/parameter invalid DITOLAK default; aksi RISIKO TINGGI menunggu persetujuan admin; idempotensi + kedaluwarsa tugas; emergency stop per perangkat; layanan `SLCAgent` identitas jelas yang TIDAK menyamar komponen Windows / tidak menonaktifkan Defender / tidak menghalangi admin berhenti-uninstall; data DEMO selalu berlabel `SINTETIS-DEMO`; setiap event berlabel asal (telemetri/sintetis/replay/inferensi) — tidak ada data yang dipalsukan sebagai nyata.
+- ✅ Semua klaim keamanan punya test regresi otomatis (lihat `docs/RISK-MATRIX.md`, `docs/RANGE-SECURITY-v3.0.md`, dan `docs/SLC-ARCHITECTURE-v4.0.md`).
 
 ## Instalasi
 
@@ -83,6 +111,13 @@ Live capture butuh `tcpdump`/`tshark`/`dumpcap` (dicek saat runtime).
 ## Pemakaian
 
 ```bash
+# --- SLC v4.0 (controller → agent Windows → misi → demo) ---
+python3 slc_server.py --host 0.0.0.0 --port 9443 [--cert cert.pem --key key.pem]
+python3 slc_endpoint.py --install-layanan        # cetak prosedur layanan SLCAgent
+python3 slc_endpoint.py --host <ctrl> --id DEV-XXXX --kunci <enroll> [--tls --pin <sha256>]
+python3 slc_demo.py --demo                       # mode DEMO (data sintetis berlabel)
+python3 slc_demo.py --evaluasi --tulis laporan.md  # laporan acceptance suite nyata
+
 # Menu utama (v1.1–v2.0, submenu "A. Lab Lanjutan" 1-9):
 python webcam_guard.py
 
@@ -133,7 +168,7 @@ python fuzz_lab.py --seed 42 && python fuzz_lab.py --seed 7
 python posture.py                                # gate rilis (exit 0/1)
 ```
 
-Cakupan **345 test** (18 file test): semua cakupan v1.3 (pairing/token, consent,
+Cakupan **486 test** (26 file test): semua cakupan v1.3 (pairing/token, consent,
 sesi, wire protokol, RBAC + PBKDF2 + rate limiter + hash-chain, PCAP + anomali,
 forensik, credcheck, redsim) **plus** regresi hardening v2.0 (append lintas-proses
 utuh, truncation/reorder/duplikasi terdeteksi, lockout + anti-enumeration,
@@ -143,12 +178,20 @@ crash=0, cek posture) **plus** range v3.0: enrollment + revoke + lockdown +
 anti-replay + MAC HMAC (31 test), controller RBAC persisten + whitelist +
 agent read-only via socket loopback nyata (42 test), ekstensi netmon
 sertifikat/kualitas/korelasi DNS (25 test), scenario engine scope-enforced
-in-scope vs out-of-scope (24 test), laporan before/after K1..K5 (19 test).
+in-scope vs out-of-scope (24 test), laporan before/after K1..K5 (19 test)
+**plus** SLC v4.0: action registry (25 test), control plane + policy +
+emergency stop (26 test), endpoint agent + TLS pinning (16 lulus + 3 skip
+jujur, 19 total), mission engine (19 test), event pipeline berlabel (14 test),
+twin + remediasi (18 test), evaluasi RED/BLUE (6 test), demo + UI (14 test).
+Hasil run terakhir: **486 test — 483 lulus, 3 skip** (TLS butuh sertifikat
+nyata; tidak dipalsukan).
 
 > Catatan jujur: test protokol memakai socket polos (`ssl_ctx=None`); sandbox
 > tidak punya antarmuka jaringan fisik, kamera, atau pip — jadi handshake TLS
-> antar-2-host nyata, fitur kamera OpenCV, dan `pip-audit`/SBOM diverifikasi
-> manual di laptop owner (lihat `docs/RISK-MATRIX.md`, status NOT RUN).
+> antar-2-host nyata (3 test TLS pinning SLC di-skip, butuh sertifikat
+> nyata), fitur kamera OpenCV, instalasi layanan Windows fisik, dan
+> `pip-audit`/SBOM diverifikasi manual di laptop owner (lihat
+> `docs/RISK-MATRIX.md`, status NOT RUN, dan `docs/SLC-ACCEPTANCE-v4.0.md`).
 
 ### Benchmark (metode: `time.monotonic`, 1 warm-up + 3 run, median, sandbox bersama)
 
@@ -191,21 +234,40 @@ range_controller.py   Lab controller ter-autentikasi (RBAC persisten + whitelist
 range_agent.py        Endpoint agent read-only (proses/koneksi/FIM/priv/health)
 range_scenarios.py    Scenario engine scope-enforced (MITRE, coverage report)
 range_report.py       Laporan before/after (kriteria penerimaan K1..K5)
+slc_control.py        Control plane SLC (enroll/policy/antrean/emergency stop)
+slc_server.py         Transport controller SLC (TCP :9443, TLS opsional, HMAC)
+slc_endpoint.py        Agent Windows SLCAgent (heartbeat, deploy, layanan sc.exe)
+slc_actions.py        Action registry eksplisit 10 aksi (tolak default)
+slc_mission.py        Mission engine (7 state, DAG paralel, verifikasi)
+slc_events.py         Event pipeline berlabel asal (telemetri/sintetis/replay/inferensi)
+slc_redblue.py        Evaluasi RED/BLUE (matriks MITRE + precision/recall)
+slc_twin.py           Digital twin + what-if (dependensi wajib bukti)
+slc_remediation.py    Remediasi 12 langkah (checkpoint + rollback + zona larangan)
+slc_ui.py             Horror Command Center TUI (persona + aksesibilitas)
+slc_demo.py           Mode DEMO sintetis berlabel + laporan acceptance
 constraints.txt       Pin versi dependensi
 requirements.txt      Dependensi runtime
 .github/workflows/ci.yml  CI: compile, test, fuzz, smoke, posture gate
+docs/SLC-ARCHITECTURE-v4.0.md  Arsitektur v4.0 (modul slc_*, batas keamanan)
+docs/SLC-INSTALL-DEMO.md      Instalasi layanan Windows + 11 langkah demo UTS
+docs/SLC-ACCEPTANCE-v4.0.md   Laporan acceptance (digenerate slc_demo.py --evaluasi)
 docs/RANGE-SECURITY-v3.0.md  Desain keamanan range v3.0
 docs/RANGE-AUDIT-v2.0.md    Audit baseline sebelum range (B-01..B-10)
 docs/RANGE-REPORT-v3.0.md   Laporan before/after (angka nyata, digenerate range_report.py)
 docs/V2.0-SECURITY.md   Desain keamanan v2.0
 docs/RISK-MATRIX.md     Pemetaan risiko → kontrol → test
 docs/AUDIT-v1.3.md       Audit v1.3 (historis)
-tests/                unittest (18 file, 345 test) + scope_loopback.json fixture
+tests/                unittest (26 file, 486 test) + scope_loopback.json fixture
 ```
 
-### Uninstal / pembersihan range
+### Uninstal / pembersihan SLC + range
 
 ```bash
+# SLC v4.0 — di tiap PC lab (agent TIDAK menghalangi uninstall):
+sc.exe stop SLCAgent && sc.exe delete SLCAgent && rmdir /s /q C:\lab
+# Controller: hapus state SLC (kredensial 0600, jangan di-commit):
+rm slc_devices.json
+# Range v3.0:
 python3 range_registry.py --revoke dev-XXXX   # cabut tiap perangkat (opsional)
 rm devices.json operators.json                # hapus kredensial lab (0600)
 rm range_registry.py range_controller.py range_agent.py \
@@ -217,14 +279,19 @@ di-gitignore.
 
 ## Roadmap
 
-- ~~Phase 3: agent endpoint telemetry~~ — **TERWUJUD di v3.0** sebagai range
-  (`range_registry`/`range_controller`/`range_agent`; jalur TCP plaintext
-  loopback — upgrade TLS/mTLS antar-host = kerja manual owner).
+- ~~Phase 3: agent endpoint telemetry~~ — **TERWUJUD di v3.0** sebagai range,
+  diperluas v4.0 oleh SLC (layanan Windows `SLCAgent`, action registry,
+  mission engine).
+- ~~Control plane multi-PC + otonomi terbatas~~ — **TERWUJUD di v4.0**
+  (`slc_*`; handshake TLS antar-host nyata = kerja manual owner di lab
+  Windows fisik, prosedur di `docs/SLC-INSTALL-DEMO.md`).
 - Phase 4: proxy HTTPS lab eksplisit untuk aplikasi uji — ditunda.
-- Dashboard web — versi teks (`lab_status.py`, kini + baris range) jalan; UI web ditunda.
+- Dashboard web — TUI (`slc_ui.py`, `lab_status.py`) jalan; UI web ditunda.
 - SBOM (CycloneDX/SPDX) + `pip-audit` di CI — menunggu lingkungan dengan pip/network.
 - `flock` saat ini POSIX-only (Linux/macOS); penguncian file Windows belum diuji.
-- `last_seen` perangkat di registry belum dipersist (in-memory saja) — minor, tercatat.
+- Verifikasi instalasi `sc.exe` di PC Windows fisik — manual owner (prosedur
+  terdokumentasi; CI tidak punya Windows runner).
+- Code signing opsional — menunggu sertifikat publisher.
 
 ## Disclaimer
 

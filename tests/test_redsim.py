@@ -23,10 +23,15 @@ class ScopeBase(unittest.TestCase):
                        "cidrs": ["192.168.56.0/24"]}, f)
         self.events_path = os.path.join(self.dir.name, "events.jsonl")
         self.audit_path = os.path.join(self.dir.name, "audit.jsonl")
+        # v4.0: simpan nilai asli agar bisa direstore di tearDown (dulu bocor
+        # ke test lain — test_redsim menimpa AUDIT_FILE global tanpa restore,
+        # membuat test_slc_redblue gagal dengan tmpdir yang sudah dihapus).
+        self._audit_asli = redsim.AUDIT_FILE
         redsim.AUDIT_FILE = self.audit_path
         self.guard = redsim.ScopeGuard(self.scope_path)
 
     def tearDown(self):
+        redsim.AUDIT_FILE = self._audit_asli  # v4.0: pulihkan modul
         self.dir.cleanup()
 
 
