@@ -24,14 +24,42 @@ class TestGenerateCredentials(unittest.TestCase):
 
 
 class TestMask(unittest.TestCase):
-    def test_mask_panjang(self):
+    """v2.0: kebijakan 'ketat' (DEFAULT) tidak menampilkan potongan
+    awal/akhir yang bisa membantu tebakan; 'ringan' kompatibel v1.3."""
+
+    def test_mask_ketat_tanpa_potongan(self):
         m = credcheck.mask("Lab-SuperRahasia12345")
         self.assertNotIn("SuperRahasia", m)
-        self.assertTrue(m.startswith("La"))
-        self.assertTrue(m.endswith("45"))
+        self.assertFalse(m.startswith("La"))
+        self.assertFalse(m.endswith("45"))
+
+    def test_mask_ketat_format(self):
+        # panjang disertutupi jujur, isi tidak
+        self.assertEqual(credcheck.mask("Lab-SuperRahasia12345"),
+                         "******** (len=21)")
+
+    def test_mask_ketat_panjang_berbeda_dibedakan(self):
+        self.assertIn("len=8", credcheck.mask("abcdefgh"))
+        self.assertIn("len=9", credcheck.mask("abcdefghi"))
+
+    def test_mask_ringan_kompatibel(self):
+        self.assertEqual(
+            credcheck.mask("Lab-SuperRahasia12345", kebijakan="ringan"),
+            "La…45")
 
     def test_mask_pendek(self):
         self.assertEqual(credcheck.mask("abc"), "***")
+        self.assertEqual(credcheck.mask("abc", kebijakan="ringan"), "***")
+
+    def test_scan_text_bukti_ketat_default(self):
+        nilai = "Lab-xyz-123456789"
+        t = f"password = '{nilai}'"
+        temuan = credcheck.scan_text(t, "config")
+        self.assertTrue(temuan)
+        for x in temuan:
+            # tidak ada 2 karakter pertama/terakhir nilai yang muncul
+            self.assertNotIn(nilai[:2], x["bukti"])
+            self.assertNotIn(nilai[-2:], x["bukti"])
 
 
 class TestEntropy(unittest.TestCase):

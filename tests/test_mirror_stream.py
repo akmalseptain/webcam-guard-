@@ -118,14 +118,37 @@ class TestMirrorServer(ServerBase):
             mirror_stream.kirim_json(s, {"cmd": "RESUME"})
             self.assertTrue(_tunggu(lambda: self.srv.state == "aktif"))
 
-    def test_stop_req_menghentikan_sesi(self):
+    def test_stop_req_admin_menghentikan_sesi(self):
+        # v2.0: STOP_REQ hanya admin (dulu viewer bisa menstop sesi global)
         with self._sambung() as s:
-            self._hello(s)
+            self._hello(s, "admin")
             mirror_stream.kirim_json(s, {"cmd": "STOP_REQ"})
             jenis, data = mirror_stream.terima_frame(s)
             self.assertEqual(data["cmd"], "STOP")
             self.assertTrue(_tunggu(lambda: not self.srv.running))
             self.assertEqual(self.srv.state, "berhenti")
+
+    def test_stop_req_viewer_ditolak(self):
+        # v2.0: viewer menerima STOP_DENIED — sesi global tetap berjalan
+        with self._sambung() as s:
+            self._hello(s, "viewer")
+            mirror_stream.kirim_json(s, {"cmd": "STOP_REQ"})
+            jenis, data = mirror_stream.terima_frame(s)
+            self.assertEqual(data["cmd"], "STOP_DENIED")
+            self.assertTrue(self.srv.running)
+            self.assertEqual(self.srv.state, "aktif")
+
+    def test_rate_limit_setelah_5_gagal(self):
+        # v2.0: 5 kegagalan auth dari IP yang sama → koneksi berikutnya
+        # dikunci (token benar sekalipun DITOLAK selama terkunci)
+        for _ in range(5):
+            with self._sambung() as s:
+                resp = self._hello(s, "viewer", token="0" * 64)
+                self.assertEqual(resp["cmd"], "DENY")
+        with self._sambung() as s:
+            resp = self._hello(s, "viewer")  # token BENAR
+            self.assertEqual(resp["cmd"], "DENY")
+            self.assertIn("terlalu banyak", resp["alasan"])
 
     def test_revoke_mengirim_revoked(self):
         with self._sambung() as s:
@@ -143,6 +166,55 @@ class TestMirrorServer(ServerBase):
             jenis, data = mirror_stream.terima_frame(s)
             self.assertEqual(jenis, "FRM")
             self.assertEqual(data, b"\xff\xd8jpg")
+
+
+class TestMirrorServerTokenMap(unittest.TestCase):
+    """v2.0: role ditentukan SISI SERVER dari token_map (klaim klien diabaikan)."""
+
+    def setUp(self):
+        self.kode = mirror_auth.buat_kode_pairing()
+        self.token_admin = mirror_stream.buat_token_acak()
+        self.token_viewer = mirror_stream.buat_token_acak()
+        self.srv = mirror_stream.MirrorServer(
+            self.kode, "lab-laptop", host="127.0.0.1", port=0,
+            ssl_ctx=None, max_penonton=3,
+            token_map={self.token_admin: "admin",
+                       self.token_viewer: "viewer"})
+        self.srv.start()
+        self.port = self.srv.server_sock.getsockname()[1]
+        threading.Thread(target=self.srv.accept_loop, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.stop()
+
+    def test_token_acak_menentukan_role(self):
+        # klien MENGKLAIM "admin" tapi membawa token viewer → tetap viewer
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        with s:
+            s.settimeout(5)
+            mirror_stream.kirim_json(s, {"cmd": "HELLO", "kode": self.kode,
+                                         "role": "admin",
+                                         "token": self.token_viewer})
+            resp = mirror_stream.terima_json(s)
+            self.assertEqual(resp["cmd"], "WELCOME")
+            self.assertTrue(resp["id"].startswith("viewer@"))
+
+    def test_token_tidak_dikenal_ditolak(self):
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        with s:
+            s.settimeout(5)
+            mirror_stream.kirim_json(s, {"cmd": "HELLO", "kode": self.kode,
+                                         "role": "admin",
+                                         "token": mirror_stream.buat_token_acak()})
+            resp = mirror_stream.terima_json(s)
+            self.assertEqual(resp["cmd"], "DENY")
+            self.assertIn("token", resp["alasan"])
+
+    def test_token_acak_256_bit(self):
+        # 64 hex char = 256 bit — bukan token deterministik v1.3
+        t = mirror_stream.buat_token_acak()
+        self.assertEqual(len(t), 64)
+        self.assertNotEqual(t, mirror_stream.buat_token_acak())
 
 
 if __name__ == "__main__":
