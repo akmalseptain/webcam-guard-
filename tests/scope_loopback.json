@@ -1,0 +1,5 @@
+{
+  "catatan": "FIXTURE UJI loopback — memuat 127.0.0.1 agar scenario engine bisa diuji end-to-end di CI/laptop tanpa host lab nyata. JANGAN dipakai sebagai scope produksi: di lab nyata, tambahkan hanya host/VM yang benar-benar diotorisasi.",
+  "hosts": ["127.0.0.1"],
+  "cidrs": ["127.0.0.0/8"]
+}
