@@ -29,7 +29,7 @@ from audit_core import _kunci_file, _sha256_file, tulis_anchor_atomik, \
     _entry_terakhir
 
 KINDS = ("netmon", "credcheck", "redsim", "stealth", "mirror",
-         "audit", "process", "config")
+         "audit", "process", "config", "slc")
 
 
 def now_ts():
