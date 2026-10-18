@@ -15,12 +15,16 @@ Skenario (dengan pemetaan MITRE ATT&CK):
 
 Hasil skenario + event normalisasi ditulis ke lab_events.jsonl
 (via forensics) dan operasi istimewa ke lab_audit.jsonl (via audit_core).
+
+v2.0: CLI `--target` — validasi eksplisit satu target sebelum skenario.
+Target di luar scope -> DITOLAK, ter-audit, exit code 2 (bukan crash).
 """
 
 import argparse
 import ipaddress
 import json
 import os
+import sys
 
 import audit_core
 import forensics
@@ -218,7 +222,7 @@ class SkenarioPrivilege(Skenario):
         rbac.add_user("lab-auditor", "Audit-Synth-1", "auditor")
 
         # auditor mencoba aksi istimewa 'jalankan_skenario'
-        boleh = rbac.authorize("auditor", "jalankan_skenario")
+        boleh = rbac.authorize("lab-auditor", "jalankan_skenario")
         # viewer tidak dikenal mencoba 'kelola_pengguna'
         role_salah = rbac.authenticate("lab-auditor", "password-salah")
         audit = audit_core.AuditLog(AUDIT_FILE)
@@ -299,19 +303,38 @@ class ScenarioRunner:
 
 def main():
     ap = argparse.ArgumentParser(
-        description="redsim v1.3 (lab) — emulasi adversary TERKUNCI scope "
+        description="redsim v2.0 (lab) — emulasi adversary TERKUNCI scope "
                     "(recon/beacon/persistensi/privilege, MITRE ATT&CK).")
     ap.add_argument("--scope", default=SCOPE_FILE)
     ap.add_argument("--events", default=EVENTS_FILE)
     ap.add_argument("--audit", default=AUDIT_FILE)
+    ap.add_argument("--target", default=None,
+                    help="validasi eksplisit satu target; di luar scope "
+                         "-> DITOLAK + audit + exit 2")
     args = ap.parse_args()
+
+    # v2.0: validasi --target SEBELUM skenario apa pun dijalankan
+    if args.target:
+        try:
+            guard = ScopeGuard(args.scope)
+        except (OSError, ValueError) as e:
+            print(f"[redsim] scope file tidak dapat dibaca: {e}")
+            return 2
+        if not guard.in_scope(args.target):
+            audit = audit_core.AuditLog(args.audit)
+            audit.append("redsim", "REFUSED_OUT_OF_SCOPE",
+                         f"target {args.target} di luar lab_scope.json")
+            print(f"[redsim] DITOLAK: target '{args.target}' di luar "
+                  f"scope lab yang diotorisasi (penolakan ter-audit)")
+            return 2
+        print(f"[redsim] Target '{args.target}' DALAM scope — lanjut skenario.")
 
     runner = ScenarioRunner(args.scope, args.events, args.audit)
     try:
         laporan = runner.run()
     except ScopeError as e:
         print(f"[redsim] {e}")
-        return
+        return 2
 
     print("=" * 62)
     print(" RED SIM — Hasil Emulasi (scope-enforced)")
@@ -327,7 +350,8 @@ def main():
     print(f"  Audit utuh     : {laporan['integritas_audit']}")
     print("=" * 62)
     print(f"  Event -> {args.events} | Audit -> {args.audit}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

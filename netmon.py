@@ -21,6 +21,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import time
 from datetime import datetime
 
@@ -28,6 +29,21 @@ PORT_DNS = 53
 PORT_HTTP = 80
 PORT_TLS = 443
 PORT_C2_TERCURIGA = (4444, 5555, 1337, 8888, 31337, 4445)
+
+# v2.0: port yang WAJAR untuk trafik sehari-hari — beacon ke port ini
+# TIDAK ditandai (mengurangi false-positive pada polling/monitor biasa).
+PORT_WAJAR = frozenset({53, 80, 123, 443, 22, 67, 68, 8080, 8443})
+
+# v2.0: ambang heuristik DETEKSI — configurable, trade-off didokumentasikan:
+# - beacon_cv_maks kecil → lebih sedikit FP, lebih banyak FN (jitter tak terdeteksi)
+# - beacon_min_packets besar → lebih tahan noise, tapi beacon singkat lolos
+AMBANG_DEFAULT = {
+    "beacon_min_packets": 8,
+    "beacon_rata_min": 0.5,
+    "beacon_rata_maks": 120.0,
+    "beacon_cv_maks": 0.25,
+    "scan_min_port": 10,
+}
 
 ADAPTER_CAPTURE = ("tcpdump", "tshark", "dumpcap")
 
@@ -75,6 +91,12 @@ def baca_pcap(path):
             if len(ph) < 16:
                 break
             ts_sec, ts_usec, incl, _orig = struct.unpack("<IIII", ph)
+            # v2.0 (bug hasil fuzz F1): incl raksasa -> MemoryError.
+            # Batasi terhadap max(snaplen, 256 KiB) sebelum membaca.
+            if incl > max(snaplen, 262144):
+                raise ValueError(
+                    f"record PCAP tidak wajar: incl_len={incl} > "
+                    f"max(snaplen={snaplen}, 262144) — file korup?")
             frame = f.read(incl)
             if len(frame) < incl:
                 break
@@ -315,10 +337,12 @@ class FlowTable:
         if f is None:
             f = {"kunci": kunci, "packets": 0, "bytes": 0,
                  "first": meta["ts"], "last": meta["ts"],
+                 "ts_list": [],
                  "apps": set(), "details": []}
             self.flows[kunci] = f
         f["packets"] += 1
         f["bytes"] += meta["bytes"]
+        f["ts_list"].append(meta["ts"])  # v2.0: untuk cv_interval (anti-FP)
         f["first"] = min(f["first"], meta["ts"])
         f["last"] = max(f["last"], meta["ts"])
         if meta["app"]:
@@ -338,29 +362,58 @@ class FlowTable:
                 "packets": f["packets"], "bytes": f["bytes"],
                 "first": f["first"], "last": f["last"],
                 "durasi_s": round(durasi, 3),
+                "cv_interval": _cv_interval(f["ts_list"]),
                 "apps": sorted(f["apps"]),
             })
         return sorted(hasil, key=lambda x: (x["src"], x["dport"], x["first"]))
 
 
 # ------------------------------------------------------------
-# Deteksi anomali
+# Deteksi anomali (v2.0: explainable — fakta vs kesimpulan)
 # ------------------------------------------------------------
-def detect_anomalies(flows):
-    """Deteksi dari daftar flow (hasil FlowTable.daftar()).
+def _cv_interval(ts_list):
+    """Koefisien variasi (cv) interval antar-paket.
 
-    Mengembalikan list temuan dengan pemetaan MITRE ATT&CK:
-    - port_c2  : dport port khas C2            (T1071)
-    - port_scan: satu src menyentuh >= 10 port berbeda (T1046)
-    - beacon   : interval antar-paket sangat reguler (T1071)
+    cv kecil -> interval sangat teratur (indikasi beacon); cv besar ->
+    trafik wajar. None bila tak bisa dihitung (paket < 3 / tanpa interval).
     """
+    if not ts_list or len(ts_list) < 3:
+        return None
+    urut = sorted(ts_list)
+    interval = [b - a for a, b in zip(urut, urut[1:])]
+    rata = sum(interval) / len(interval)
+    if rata <= 0:
+        return None
+    ragam = sum((x - rata) ** 2 for x in interval) / len(interval)
+    return (ragam ** 0.5) / rata
+
+
+def detect_anomalies(flows, ambang=None):
+    """Deteksi dari daftar flow (hasil FlowTable.daftar()) — v2.0 explainable.
+
+    Setiap temuan memuat: tipe, mitre, sev, SKOR keyakinan (0..1), dan
+    BUKTI eksplisit. Skor < 1.0 = heuristik, BUKAN kepastian: port
+    mencurigakan TIDAK membuktikan aktivitas jahat.
+
+    - port_c2  : dport port khas C2                       (T1071, SEDANG)
+    - port_scan: satu src menyentuh >= scan_min_port port (T1046, TINGGI)
+    - beacon   : interval TERATUR (cv <= ambang) + konteks port
+                 TIDAK wajar                              (T1071, SEDANG)
+
+    ambang: dict untuk override AMBANG_DEFAULT (trade-off didokumentasikan).
+    """
+    a = dict(AMBANG_DEFAULT)
+    if ambang:
+        a.update(ambang)
     temuan = []
-    # 1) port C2
+    # 1) port C2 — heuristik lemah (port saja), skor rendah
     for f in flows:
         if f["dport"] in PORT_C2_TERCURIGA:
             temuan.append({
-                "tipe": "port_c2", "mitre": "T1071",
-                "sev": "TINGGI",
+                "tipe": "port_c2", "mitre": "T1071", "sev": "SEDANG",
+                "skor": 0.6,
+                "bukti": [f"dport={f['dport']} termasuk daftar port khas C2",
+                          "port saja TIDAK membuktikan aktivitas jahat"],
                 "temuan": f"{f['src']}:{f['sport']} -> {f['dst']}:"
                           f"{f['dport']} (port khas C2)",
             })
@@ -369,27 +422,163 @@ def detect_anomalies(flows):
     for f in flows:
         per_src.setdefault(f["src"], set()).add(f["dport"])
     for src, dports in per_src.items():
-        if len(dports) >= 10:
+        if len(dports) >= a["scan_min_port"]:
             temuan.append({
-                "tipe": "port_scan", "mitre": "T1046",
-                "sev": "TINGGI",
+                "tipe": "port_scan", "mitre": "T1046", "sev": "TINGGI",
+                "skor": 0.9,
+                "bukti": [f"{src} menyentuh {len(dports)} port berbeda",
+                          f"port tersentuh: {sorted(dports)[:15]}"],
                 "temuan": f"{src} menyentuh {len(dports)} port berbeda",
             })
-    # 3) beacon: durasi reguler — pakai flow dgn packets >= 5
+    # 3) beacon: interval teratur (cv) + konteks port — v2.0 anti-FP
     for f in flows:
-        if f["packets"] >= 5 and f["durasi_s"] > 0:
-            rata = f["durasi_s"] / (f["packets"] - 1)
-            # kriteria: interval rata-rata antara 0.5-120 s dan
-            # jumlah paket besar relatif durasi (interval konsisten
-            # didekati oleh flow demo yang memang teratur)
-            if 0.5 <= rata <= 120.0 and f["packets"] >= 8:
-                temuan.append({
-                    "tipe": "beacon", "mitre": "T1071",
-                    "sev": "SEDANG",
-                    "temuan": f"{f['src']} -> {f['dst']}:{f['dport']}: "
-                              f"{f['packets']} paket, interval ~{rata:.1f}s",
-                })
+        if f["packets"] < a["beacon_min_packets"] or f["durasi_s"] <= 0:
+            continue
+        rata = f["durasi_s"] / (f["packets"] - 1)
+        if not (a["beacon_rata_min"] <= rata <= a["beacon_rata_maks"]):
+            continue
+        cv = f.get("cv_interval")
+        if cv is None or cv > a["beacon_cv_maks"]:
+            continue  # interval tidak teratur -> bukan indikasi beacon kuat
+        konteks = (f["dport"] in PORT_C2_TERCURIGA
+                   or f["dport"] not in PORT_WAJAR)
+        if not konteks:
+            continue  # polling/monitor ke port wajar -> bukan temuan
+        temuan.append({
+            "tipe": "beacon", "mitre": "T1071", "sev": "SEDANG",
+            "skor": 0.75,
+            "bukti": [f"{f['packets']} paket, interval rata-rata "
+                      f"{rata:.2f}s, cv={cv:.3f} (teratur)",
+                      f"dport={f['dport']} bukan port wajar sehari-hari"],
+            "temuan": f"{f['src']} -> {f['dst']}:{f['dport']}: "
+                      f"{f['packets']} paket, interval ~{rata:.1f}s",
+        })
     return temuan
+
+
+# ------------------------------------------------------------
+# Evaluasi detektor dengan fixture BERLABEL (ground truth sintetis)
+# ------------------------------------------------------------
+def _meta_flow(src="192.168.56.10", dst="203.0.113.66", sport=33333,
+               dport=4444, packets=10, interval=10.0, proto="TCP"):
+    """Flow sintetis berinterval teratur (untuk evaluasi berlabel)."""
+    ts_list = [1000.0 + i * interval for i in range(packets)]
+    return {
+        "src": src, "sport": sport, "dst": dst, "dport": dport,
+        "proto": proto, "packets": packets, "bytes": packets * 200,
+        "first": ts_list[0], "last": ts_list[-1],
+        "durasi_s": round((packets - 1) * interval, 3),
+        "cv_interval": _cv_interval(ts_list), "apps": [],
+    }
+
+
+def _meta_jitter(src="192.168.56.10", dst="203.0.113.99", sport=33334,
+                 dport=9999, packets=11):
+    """Flow beacon dengan jitter tinggi (interval 20/40s bergantian)."""
+    ts_list = [1000.0]
+    for i in range(packets - 1):
+        ts_list.append(ts_list[-1] + (20.0 if i % 2 == 0 else 40.0))
+    return {
+        "src": src, "sport": sport, "dst": dst, "dport": dport,
+        "proto": "TCP", "packets": packets, "bytes": packets * 200,
+        "first": ts_list[0], "last": ts_list[-1],
+        "durasi_s": round(ts_list[-1] - ts_list[0], 3),
+        "cv_interval": _cv_interval(ts_list), "apps": [],
+    }
+
+
+def _meta_scan(src="192.168.56.77", dst="192.168.56.99", n_port=20):
+    """Sekumpulan flow scan: satu src menyentuh banyak port berbeda."""
+    return [{
+        "src": src, "sport": 60000, "dst": dst, "dport": 1000 + i,
+        "proto": "TCP", "packets": 1, "bytes": 60,
+        "first": 1000.0 + i * 0.01, "last": 1000.0 + i * 0.01,
+        "durasi_s": 0.0, "cv_interval": None, "apps": [],
+    } for i in range(n_port)]
+
+
+def evaluasi_detektor():
+    """Evaluasi PRECISION/RECALL/FPR/FNR terhadap fixture berlabel.
+
+    CATATAN JUJUR: fixture 100% sintetis buatan sendiri — angka ini
+    mengukur perilaku detektor pada data uji ini, BUKAN akurasi dunia nyata.
+    """
+    fixtures = [
+        # ---- BENIGN (harusnya TIDAK ada temuan) ----
+        {"label": "benign_http_polling", "benign": True,
+         "flows": [_meta_flow(dport=443, packets=9, interval=1.0)],
+         "diharapkan": []},
+        {"label": "benign_dns", "benign": True,
+         "flows": [_meta_flow(dport=53, packets=12, interval=5.0,
+                              proto="UDP")],
+         "diharapkan": []},
+        {"label": "benign_ntp", "benign": True,
+         "flows": [_meta_flow(dport=123, packets=10, interval=64.0,
+                              proto="UDP")],
+         "diharapkan": []},
+        {"label": "benign_browsing", "benign": True,
+         "flows": [_meta_flow(dport=80, packets=4, interval=0.3),
+                   _meta_flow(dport=443, packets=5, interval=7.0,
+                              dst="203.0.113.7")],
+         "diharapkan": []},
+        {"label": "benign_ssh", "benign": True,
+         "flows": [_meta_flow(dport=22, packets=6, interval=45.0,
+                              dst="192.168.56.20")],
+         "diharapkan": []},
+        # ---- ANOMALI (harusnya ada temuan) ----
+        {"label": "anom_beacon_c2", "benign": False,
+         "flows": [_meta_flow(dport=4444, packets=10, interval=10.0)],
+         "diharapkan": ["beacon", "port_c2"]},
+        {"label": "anom_beacon_highport", "benign": False,
+         "flows": [_meta_flow(dport=5555, packets=10, interval=30.0)],
+         "diharapkan": ["beacon", "port_c2"]},
+        {"label": "anom_port_scan", "benign": False,
+         "flows": _meta_scan(),
+         "diharapkan": ["port_scan"]},
+        {"label": "anom_beacon_jitter", "benign": False,
+         "flows": [_meta_jitter()],
+         "diharapkan": ["beacon"]},
+    ]
+    tp = fp = fn = tn = 0
+    rincian = []
+    for fx in fixtures:
+        temuan = detect_anomalies(fx["flows"])
+        tipe = sorted({t["tipe"] for t in temuan})
+        if fx["benign"]:
+            if temuan:
+                fp += 1
+                hasil = "FP"
+            else:
+                tn += 1
+                hasil = "TN"
+        else:
+            if set(fx["diharapkan"]) & set(tipe):
+                tp += 1
+                hasil = "TP"
+            else:
+                fn += 1
+                hasil = "FN"
+        rincian.append({"label": fx["label"], "hasil": hasil,
+                        "temuan": tipe})
+    presisi = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    fpr = fp / (fp + tn) if (fp + tn) else 0.0
+    fnr = fn / (tp + fn) if (tp + fn) else 0.0
+    return {
+        "n_fixture": len(fixtures),
+        "TP": tp, "FP": fp, "FN": fn, "TN": tn,
+        "precision": round(presisi, 3),
+        "recall": round(recall, 3),
+        "fpr": round(fpr, 3), "fnr": round(fnr, 3),
+        "rincian": rincian,
+        "catatan": [
+            "fixture sintetis berlabel buatan sendiri — BUKAN trafik nyata",
+            "FN diketahui & diakui: beacon jitter tinggi (cv di atas "
+            "ambang) belum terdeteksi — jangan klaim recall 1.0",
+            "port mencurigakan hanyalah heuristik, bukan bukti serangan",
+        ],
+    }
+
 
 
 # ------------------------------------------------------------
@@ -425,12 +614,20 @@ def cari_adapter():
     return None
 
 
-def capture_live(iface, minutes, out_pcap):
+def capture_live(iface, minutes, out_pcap, setuju_scope=False):
     """Jalankan adapter capture (tcpdump/tshark/dumpcap) dari lab.
 
+    v2.0: capture live kini WAJIB dengan konfirmasi scope eksplisit
+    (setuju_scope=True / CLI --confirm-scope) — tanpa itu PermissionError.
+    Ini menjaga konsistensi dengan redsim yang scope-enforced: jangan
+    menangkap trafik di luar lab yang diotorisasi.
     Hanya untuk antarmuka lab yang DIOTORIZASI. Bila tidak ada adapter,
     beri pesan jelas (tidak ada kemampuan palsu).
     """
+    if not setuju_scope:
+        raise PermissionError(
+            "capture live DITOLAK tanpa --confirm-scope: konfirmasikan "
+            "bahwa antarmuka adalah lab yang diotorisasi (lihat lab_scope.json)")
     adapter = cari_adapter()
     if adapter is None:
         raise RuntimeError(
@@ -544,8 +741,9 @@ def run_demo(save_pcap=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="netmon v1.3 (lab) — monitoring metadata jaringan: "
-                    "PCAP, flow, anomali; live capture via adapter.")
+        description="netmon v2.0 (lab) — monitoring metadata jaringan: "
+                    "PCAP, flow, anomali explainable; live capture via "
+                    "adapter (butuh --confirm-scope).")
     ap.add_argument("--demo", action="store_true",
                     help="analisis 25 paket sintetis (tanpa jaringan nyata)")
     ap.add_argument("--save-pcap", default="captures/demo_capture.pcap",
@@ -554,28 +752,65 @@ def main():
     ap.add_argument("--capture-iface", help="antarmuka lab (butuh adapter)")
     ap.add_argument("--minutes", type=float, default=1.0)
     ap.add_argument("--json", help="tulis hasil analisis ke file JSON")
+    ap.add_argument("--evaluasi", action="store_true",
+                    help="evaluasi detektor pada fixture berlabel "
+                         "(precision/recall/FPR/FNR — sintetis)")
+    ap.add_argument("--confirm-scope", action="store_true",
+                    help="konfirmasi eksplisit bahwa antarmuka adalah lab "
+                         "yang diotorisasi (WAJIB utk capture live)")
     args = ap.parse_args()
 
+    if args.evaluasi:
+        hasil = evaluasi_detektor()
+        print(f"[evaluasi] fixture={hasil['n_fixture']} "
+              f"TP={hasil['TP']} FP={hasil['FP']} "
+              f"FN={hasil['FN']} TN={hasil['TN']}")
+        print(f"[evaluasi] precision={hasil['precision']} "
+              f"recall={hasil['recall']} "
+              f"FPR={hasil['fpr']} FNR={hasil['fnr']}")
+        for r in hasil["rincian"]:
+            print(f"  {r['hasil']:<3} {r['label']:<22} {r['temuan']}")
+        for c in hasil["catatan"]:
+            print(f"  catatan: {c}")
+        return 0
+
     if args.capture_iface:
-        hasil = capture_live(args.capture_iface, args.minutes, args.save_pcap)
+        try:
+            hasil = capture_live(args.capture_iface, args.minutes,
+                                 args.save_pcap,
+                                 setuju_scope=args.confirm_scope)
+        except PermissionError as e:
+            print(f"[netmon] {e}")
+            return 3  # ditolak scope — exit code konsisten
+        except RuntimeError as e:
+            print(f"[netmon] {e}")
+            return 4  # adapter tidak ada
         print(f"[netmon] capture selesai: {hasil}")
-        return
+        return 0
     if args.analyze:
-        hasil = analyze_pcap(args.analyze)
+        try:
+            hasil = analyze_pcap(args.analyze)
+        except (ValueError, OSError) as e:
+            print(f"[netmon] gagal membaca PCAP: {e}")
+            return 1
         print(f"[netmon] {hasil['n_paket']} paket, {len(hasil['flows'])} flow, "
               f"{len(hasil['anomali'])} anomali")
         for a in hasil["anomali"]:
-            print(f"  [{a['tipe']}/{a['mitre']}] {a['temuan']}")
+            print(f"  [{a['tipe']}/{a['mitre']}/{a['sev']}] "
+                  f"skor={a['skor']} {a['temuan']}")
+            for b in a["bukti"]:
+                print(f"      bukti: {b}")
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
                 json.dump({"n_paket": hasil["n_paket"],
                            "n_flow": len(hasil["flows"]),
                            "anomali": hasil["anomali"]},
                           f, indent=2, ensure_ascii=False)
-        return
+        return 0
     if args.demo or True:  # default: demo
         run_demo(args.save_pcap)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

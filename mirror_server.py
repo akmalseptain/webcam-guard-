@@ -1,10 +1,13 @@
-"""mirror_server.py — Pengirim: laptop yang layarnya di-mirror (LAB).
+"""mirror_server.py — Pengirim: laptop yang layarnya di-mirror (LAB, v2.0).
 
 Alur:
-1. Buat kode pairing + token admin/viewer, tampilkan ke pengguna.
+1. Buat kode pairing + token acak 256-bit (admin/viewer) — v2.0 token
+   TIDAK dicetak kecuali diminta eksplisit (anti shoulder-surfing/log).
 2. ConsentGate: pengirim WAJIB mengetik SETUJU — tidak ada jalur bypass.
-3. Pastikan sertifikat TLS (mirror_stream.ensure_cert) -> SSLContext.
-4. MirrorServer.listen -> tangkap layar (mss) -> JPEG (cv2) -> broadcast.
+3. Pastikan sertifikat TLS (mirror_stream.ensure_cert) -> SSLContext
+   (minimum TLSv1.2), cetak FINGERPRINT SHA-256 utk --pin penonton.
+4. MirrorServer.listen (token_map: role ditentukan SISI SERVER) ->
+   tangkap layar (mss) -> JPEG (cv2) -> broadcast (bounded queue).
 5. Menu pengirim: mulai/jeda/lanjut/stop/cabut/status — semua terlihat.
 
 Setiap kejadian tercatat ke sessions.csv (audit trail).
@@ -104,7 +107,7 @@ def loop_frame(srv, ambil, fps):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="WebCam Guard v1.2 — Mirror Server (lab): bagikan layar "
+        description="WebCam Guard v2.0 — Mirror Server (lab): bagikan layar "
                     "dengan persetujuan eksplisit, terenkripsi TLS, ter-audit.")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8443)
@@ -113,18 +116,21 @@ def main():
     args = ap.parse_args()
 
     kode = mirror_auth.buat_kode_pairing()
-    token_admin = mirror_auth.buat_token(kode, "admin")
-    token_viewer = mirror_auth.buat_token(kode, "viewer")
+    # v2.0: token acak 256-bit per sesi (BUKAN deterministik dari kode
+    # pairing seperti v1.3) — role dipetakan SISI SERVER via token_map.
+    token_admin = mirror_stream.buat_token_acak()
+    token_viewer = mirror_stream.buat_token_acak()
+    token_map = {token_admin: "admin", token_viewer: "viewer"}
 
     print("=" * 58)
-    print(" WebCam Guard v1.2 — MIRROR SERVER (Cybersecurity Lab)")
+    print(" WebCam Guard v2.0 — MIRROR SERVER (Cybersecurity Lab)")
     print("=" * 58)
-    print("  Bagikan TIGA info ini HANYA kepada dosen/penonton")
-    print("  yang Anda otorisasi (out-of-band, mis. WA/email kampus):")
+    print("  Bagikan info ini HANYA kepada dosen/penonton yang Anda")
+    print("  otorisasi (out-of-band, mis. WA/email kampus):")
     print(f"    Kode pairing : {kode}")
-    print(f"    Token ADMIN  : {token_admin}")
-    print(f"    Token VIEWER : {token_viewer}")
-    print(f"  Listening     : {args.host}:{args.port}")
+    print(f"    Listening    : {args.host}:{args.port}")
+    print("    Token ADMIN / VIEWER: TIDAK dicetak di layar (v2.0).")
+    print("    Penonton memverifikasi server dengan --pin (anti-MITM).")
 
     gate = mirror_auth.ConsentGate()
     while True:
@@ -135,8 +141,29 @@ def main():
     mirror_auth.audit_log("CONSENT", "pengirim", "persetujuan eksplisit diberikan")
 
     cert_file, key_file = mirror_stream.ensure_cert()
-    print(f"  TLS           : {cert_file} (enkripsi in-transit)")
-    ctx = mirror_stream.make_server_ssl_ctx(cert_file, key_file)
+    fp = mirror_stream.cert_fingerprint(cert_file)
+    print(f"  TLS           : {cert_file} (enkripsi in-transit, min TLSv1.2)")
+    print(f"  Fingerprint sertifikat (SHA-256 DER) — salin ke penonton:")
+    print(f"    {fp}")
+    mirror_auth.audit_log("CERT_FINGERPRINT", "pengirim", fp)
+
+    # v2.0: token hanya ditampilkan bila diminta EKSPLISIT (anti
+    # shoulder-surfing / log terminal); default TIDAK dicetak.
+    try:
+        jawab = input("\nTampilkan token admin/viewer sekarang? "
+                      "(y/T, default Tidak): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        jawab = ""
+    if jawab == "y":
+        print(f"    Token ADMIN  : {token_admin}")
+        print(f"    Token VIEWER : {token_viewer}")
+        mirror_auth.audit_log("TOKEN_DITUNJUKKAN", "pengirim",
+                              "token ditampilkan di terminal (permintaan eksplisit)")
+    else:
+        print("    Token tidak ditampilkan. Jalankan ulang dan jawab 'y' "
+              "saat ingin membagikannya.")
+    print("    (Token juga tersimpan di memori sesi ini saja — tidak "
+          "ditulis ke file)")
 
     try:
         ambil = PengambilLayar(args.kualitas)
@@ -150,8 +177,9 @@ def main():
         ip = "127.0.0.1"
     info = f"{socket.gethostname()} ({ip})"
 
+    ctx = mirror_stream.make_server_ssl_ctx(cert_file, key_file)
     srv = mirror_stream.MirrorServer(kode, info, args.host, args.port,
-                                      ssl_ctx=ctx)
+                                      ssl_ctx=ctx, token_map=token_map)
     srv.start()
     mirror_auth.audit_log("LISTEN", "pengirim",
                           f"server {args.host}:{args.port}, max 3 penonton")

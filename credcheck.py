@@ -12,6 +12,11 @@ Kemampuan:
 - run_assessment(): bukti ter-mask, klasifikasi severity, rekomendasi,
   dan verifikasi 'no_secret_leak' bahwa tidak ada nilai rahasia
   yang bocor dalam laporan.
+
+v2.0: mask() memakai kebijakan "ketat" secara DEFAULT — potongan awal/akhir
+nilai rahasia tidak lagi ditampilkan (prefix/suffix bisa membantu tebakan);
+hanya panjang + asterisk. Mode "ringan" (tampilan lama) masih tersedia
+untuk kompatibilitas.
 """
 
 import argparse
@@ -40,12 +45,20 @@ def generate_credentials(n=3):
     return hasil
 
 
-def mask(nilai):
-    """Matikan nilai: 'Lab-abc…xyz' -> 'La…yz' (bukti tanpa isi asli)."""
+def mask(nilai, kebijakan="ketat"):
+    """Matikan nilai rahasia sebelum masuk bukti/laporan.
+
+    kebijakan="ketat" (DEFAULT v2.0): TIDAK ada potongan awal/akhir
+    yang bisa dipakai menebak/mengurai nilai — hanya asterisk + panjang.
+    kebijakan="ringan": kompatibel tampilan lama (2 char awal + akhir).
+    """
     s = str(nilai)
     if len(s) <= 4:
         return "*" * len(s)
-    return s[:2] + "…" + s[-2:]
+    if kebijakan == "ringan":
+        return s[:2] + "…" + s[-2:]
+    # ketat (default)
+    return "*" * min(len(s), 8) + f" (len={len(s)})"
 
 
 # ------------------------------------------------------------
@@ -225,14 +238,14 @@ def run_assessment():
             "no_secret_leak_verified": no_leak,
         },
         "catatan": "Semua kredensial adalah SINTETIS dan dibuang setelah "
-                   "asesmen; bukti dimask. Tidak ada kredensial nyata "
-                   "yang disentuh.",
+                   "asesmen; bukti dimask (kebijakan ketat: tanpa potongan "
+                   "awal/akhir). Tidak ada kredensial nyata yang disentuh.",
     }
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="credcheck v1.3 (lab) — asesmen keamanan kredensial "
+        description="credcheck v2.0 (lab) — asesmen keamanan kredensial "
                     "100% sintetis (IDOR, session, authz, secret scanning).")
     ap.add_argument("--out", default="cred_report.json")
     args = ap.parse_args()
