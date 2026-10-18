@@ -16,6 +16,7 @@ Kemampuan:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -601,6 +602,149 @@ def analyze_pcap(path):
         "flows": flows,
         "metadata": metadata,
         "anomali": detect_anomalies(flows),
+        "kualitas": ukur_kualitas(packets),          # v3.0
+        "korelasi_dns": korelasi_dns(metadata),      # v3.0
+    }
+
+
+# ------------------------------------------------------------
+# v3.0 (R3) — inspeksi sertifikat, kualitas capture, korelasi DNS
+# ------------------------------------------------------------
+def inspeksi_sertifikat(path):
+    """Fingerprint SHA-256 DER + metadata sertifikat PEM (metadata saja).
+
+    Metadata (subject/issuer/masa berlaku) via `ssl._ssl._test_decode_cert`
+    — API internal stdlib, di-GUARD: bila dekode gagal, laporkan `error`
+    secara jujur (fingerprint tetap dihitung dari DER).
+    """
+    import base64
+    import ssl
+    hasil = {"file": path, "fingerprint_sha256": None,
+             "subject": None, "issuer": None,
+             "not_before": None, "not_after": None,
+             "berlaku": None, "error": None}
+    try:
+        with open(path, "rb") as f:
+            isi = f.read()
+    except OSError as e:
+        hasil["error"] = f"tidak bisa dibaca: {e}"
+        return hasil
+    # ambil blok PEM pertama
+    if b"-----BEGIN CERTIFICATE-----" not in isi:
+        hasil["error"] = "bukan file PEM (tidak ada blok CERTIFICATE)"
+        return hasil
+    blok = isi.split(b"-----BEGIN CERTIFICATE-----", 1)[1] \
+              .split(b"-----END CERTIFICATE-----", 1)[0]
+    try:
+        der = base64.b64decode("".join(
+            blok.decode(errors="replace").split()))
+    except ValueError:
+        hasil["error"] = "base64 PEM tidak valid"
+        return hasil
+    hasil["fingerprint_sha256"] = hashlib.sha256(der).hexdigest()
+    # metadata via API internal stdlib (guarded, fallback jujur)
+    try:
+        meta = ssl._ssl._test_decode_cert(path)  # type: ignore[attr-defined]
+        hasil["subject"] = meta.get("subject")
+        hasil["issuer"] = meta.get("issuer")
+        hasil["not_before"] = meta.get("notBefore")
+        hasil["not_after"] = meta.get("notAfter")
+        hasil["berlaku"] = not meta.get("subject") is None
+    except Exception as e:  # pragma: no cover - tergantung stdlib
+        hasil["error"] = f"metadata tidak terdekode: {e}"
+    return hasil
+
+
+def ukur_kualitas(packets, ambang_gap_s=2.0):
+    """Ukur kualitas capture dari daftar (ts, frame).
+
+    Menghitung: duplikat (frame identik berdekatan waktu), reorder
+    (timestamp mundur), gap (lonjakan waktu). `estimasi_drop` adalah
+    HEURISTIK dari jumlah gap — CATATAN JUJUR: ini BUKAN pengukuran
+    packet-loss nyata (butuh tap independen / sekuensi transport).
+    """
+    n = len(packets)
+    duplikat = []
+    reorder = 0
+    gaps = []
+    terakhir = {}
+    sebelumnya_ts = None
+    for i, (ts, frame) in enumerate(packets):
+        kunci = hashlib.sha256(frame).hexdigest()[:16]
+        if kunci in terakhir:
+            j, t_lama = terakhir[kunci]
+            if abs(ts - t_lama) < 1.0:
+                duplikat.append({"indeks": i, "duplikat_dari": j})
+        terakhir[kunci] = (i, ts)
+        if sebelumnya_ts is not None and ts < sebelumnya_ts:
+            reorder += 1
+        elif sebelumnya_ts is not None and ts - sebelumnya_ts >= ambang_gap_s:
+            gaps.append({"indeks": i, "selisih_s": round(
+                ts - sebelumnya_ts, 3)})
+        sebelumnya_ts = ts
+    return {
+        "n_paket": n,
+        "n_duplikat": len(duplikat),
+        "duplikat": duplikat[:20],
+        "n_reorder": reorder,
+        "gaps": gaps[:20],
+        "n_gap": len(gaps),
+        "durasi_s": round(packets[-1][0] - packets[0][0], 3) if n >= 2
+        else 0.0,
+        "estimasi_drop": len(gaps),
+        "catatan": ("estimasi_drop adalah heuristik dari gap waktu — "
+                    "BUKAN pengukuran packet-loss nyata (butuh tap "
+                    "independen / sekuensi transport)"),
+    }
+
+
+def korelasi_dns(metadata, jendela_s=60.0):
+    """Korelasi kueri DNS dengan SNI/HTTP-Host berikutnya.
+
+    Per koneksi aplikasi (tls_sni/http), dicari kueri DNS yang:
+    - cocok nama (match), atau
+    - nama DNS adalah subdomain-nya, atau
+    - dalam jendela waktu, dan
+    - apakah dari src yang sama.
+    Metadata saja — isi terenkripsi tidak disentuh.
+    """
+    dns = [{"ts": m["ts"], "src": m["src"], "nama": n}
+           for m in metadata if m.get("app") == "dns"
+           for n in str(m.get("detail", "")).split(",") if n]
+    app = [{"ts": m["ts"], "src": m["src"], "app": m["app"],
+            "host": str(m.get("detail", "")).split(" ")[-1]}
+           for m in metadata if m.get("app") in ("tls_sni", "http")]
+    pasangan = []
+    tanpa_dns = []
+    for a in app:
+        kandidat = None
+        for d in dns:
+            if d["ts"] > a["ts"] or a["ts"] - d["ts"] > jendela_s:
+                continue
+            nama = d["nama"].rstrip(".")
+            host = a["host"].rstrip(".")
+            if host == nama:
+                kandidat = {"jenis": "match", "dns": d, }
+                break
+            if host.endswith("." + nama):
+                kandidat = {"jenis": "subdomain", "dns": d}
+                break
+            kandidat = kandidat or {"jenis": "jendela", "dns": d}
+        if kandidat:
+            kandidat["src_sama"] = kandidat["dns"]["src"] == a["src"]
+            kandidat["app"] = a
+            pasangan.append(kandidat)
+        else:
+            tanpa_dns.append(a)
+    return {
+        "n_dns": len(dns),
+        "n_app": len(app),
+        "n_pasangan": len(pasangan),
+        "pasangan": pasangan[:50],
+        "n_tanpa_dns": len(tanpa_dns),
+        "tanpa_dns": tanpa_dns[:50],
+        "catatan": ("korelasi metadata DNS↔SNI/Host dalam jendela "
+                    f"±{jendela_s:.0f}s — bukan bukti sebab-akibat"),
     }
 
 
@@ -741,14 +885,17 @@ def run_demo(save_pcap=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="netmon v2.0 (lab) — monitoring metadata jaringan: "
-                    "PCAP, flow, anomali explainable; live capture via "
+        description="netmon v3.0 (lab) — monitoring metadata jaringan: "
+                    "PCAP, flow, anomali explainable, inspeksi sertifikat, "
+                    "kualitas capture, korelasi DNS; live capture via "
                     "adapter (butuh --confirm-scope).")
     ap.add_argument("--demo", action="store_true",
                     help="analisis 25 paket sintetis (tanpa jaringan nyata)")
     ap.add_argument("--save-pcap", default="captures/demo_capture.pcap",
                     help="path simpan PCAP demo/capture")
     ap.add_argument("--analyze", help="analisis file PCAP")
+    ap.add_argument("--inspeksi-sert", metavar="PEM",
+                    help="v3.0: fingerprint SHA-256 + metadata sertifikat")
     ap.add_argument("--capture-iface", help="antarmuka lab (butuh adapter)")
     ap.add_argument("--minutes", type=float, default=1.0)
     ap.add_argument("--json", help="tulis hasil analisis ke file JSON")
@@ -759,6 +906,18 @@ def main():
                     help="konfirmasi eksplisit bahwa antarmuka adalah lab "
                          "yang diotorisasi (WAJIB utk capture live)")
     args = ap.parse_args()
+
+    if args.inspeksi_sert:
+        hasil = inspeksi_sertifikat(args.inspeksi_sert)
+        print(f"[sert] file          : {hasil['file']}")
+        print(f"[sert] fingerprint   : {hasil['fingerprint_sha256']}")
+        print(f"[sert] subject/issuer: {hasil['subject']} / "
+              f"{hasil['issuer']}")
+        print(f"[sert] berlaku       : {hasil['not_before']} -> "
+              f"{hasil['not_after']}")
+        if hasil["error"]:
+            print(f"[sert] catatan jujur : {hasil['error']}")
+        return 0
 
     if args.evaluasi:
         hasil = evaluasi_detektor()
@@ -814,3 +973,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
