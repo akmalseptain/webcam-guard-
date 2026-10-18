@@ -9,8 +9,17 @@ from datetime import datetime
 import cv2
 
 # ============================================================
-#  WebCam Guard v1.2 — Cybersecurity Lab Edition
-#  Fitur baru vs v1.1:
+#  WebCam Guard v1.3 — Advanced Cybersecurity Lab Edition
+#  Fitur baru vs v1.2 (submenu "A. Lab Lanjutan"):
+#   - netmon   : analisis PCAP + metadata DNS/SNI/HTTP + deteksi
+#                anomali (port C2, port scan, beaconing) — metadata-only
+#   - credcheck: asesmen keamanan kredensial 100% SINTETIS (masked)
+#   - redsim   : emulasi red team TERKUNCI lab_scope.json (MITRE ATT&CK)
+#   - forensics: timeline + korelasi event + bukti hash-chain
+#   - lab_status: dashboard teks status lab
+#   - audit_core: RBAC + PBKDF2 + rate limiter + audit tamper-evident
+#
+#  Fitur v1.2:
 #   - Mirror Server: bagikan layar ke penonton lab DENGAN
 #     persetujuan eksplisit + kode pairing/token + TLS + audit
 #   - Stealth Detector: kenali jejak aplikasi pemantauan
@@ -417,6 +426,41 @@ def _python_exe():
     return sys.executable or "python"
 
 
+def lab_lanjutan():
+    """Submenu Laboratorium Lanjutan (v1.3) — semua modul stdlib-only."""
+    while True:
+        print("\n---------- LAB LANJUTAN (v1.3) ----------")
+        print("1. netmon — demo analisis paket sintetis")
+        print("2. netmon — live capture (butuh tcpdump/tshark/dumpcap)")
+        print("3. credcheck — asesmen kredensial (100% sintetis)")
+        print("4. redsim — emulasi red team (scope-enforced)")
+        print("5. forensics — timeline + korelasi + laporan")
+        print("6. lab_status — dashboard status lab")
+        print("0. Kembali ke menu utama")
+        pilih = input("Pilih [0-6]: ").strip()
+        exe = _python_exe()
+        if pilih == "1":
+            subprocess.run([exe, "netmon.py", "--demo"])
+        elif pilih == "2":
+            iface = input("Antarmuka lab (mis. eth0): ").strip() or "eth0"
+            menit = input("Durasi menit [1]: ").strip() or "1"
+            subprocess.run([exe, "netmon.py", "--capture-iface", iface,
+                            "--minutes", menit, "--save-pcap",
+                            "captures/lab_capture.pcap"])
+        elif pilih == "3":
+            subprocess.run([exe, "credcheck.py"])
+        elif pilih == "4":
+            subprocess.run([exe, "redsim.py"])
+        elif pilih == "5":
+            subprocess.run([exe, "forensics.py"])
+        elif pilih == "6":
+            subprocess.run([exe, "lab_status.py"])
+        elif pilih == "0":
+            return
+        else:
+            print("Pilihan tidak valid.")
+
+
 def petunjuk_viewer():
     """Petunjuk menjalankan penonton di laptop kedua (lab)."""
     print("\n[i] ===== Mirror Viewer (laptop penonton) =====")
@@ -431,7 +475,7 @@ def petunjuk_viewer():
 
 def menu(camera_index):
     while True:
-        print("\n========== WebCam Guard v1.2 ==========")
+        print("\n========== WebCam Guard v1.3 ==========")
         print("1. Live view kamera")
         print("2. Deteksi gerakan (zona + auto rekam)")
         print("3. Face Guard (deteksi wajah + blur privasi)")
@@ -441,8 +485,9 @@ def menu(camera_index):
         print("7. Stealth Detector (simulasi defensif, dataset sintetis)")
         print("8. Mirror Server (bagikan layar dgn persetujuan eksplisit)")
         print("9. Petunjuk Mirror Viewer (untuk laptop penonton)")
+        print("A. Lab Lanjutan (netmon/credcheck/redsim/forensics/status)")
         print("0. Keluar")
-        pilih = input("Pilih menu [0-9]: ").strip()
+        pilih = input("Pilih menu [0-9A]: ").strip()
 
         if pilih == "1":
             live_view(camera_index)
@@ -466,6 +511,8 @@ def menu(camera_index):
             subprocess.run([_python_exe(), "mirror_server.py"])
         elif pilih == "9":
             petunjuk_viewer()
+        elif pilih in ("A", "a"):
+            lab_lanjutan()
         elif pilih == "0":
             print("Sampai jumpa! Tetap amankan perangkatmu. :)")
             break
@@ -475,8 +522,10 @@ def menu(camera_index):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WebCam Guard v1.2 — pengawasan webcam lokal + lab "
-                    "mirroring (persetujuan eksplisit) + stealth detector defensif")
+        description="WebCam Guard v1.3 — pengawasan webcam lokal + lab "
+                    "mirroring (persetujuan eksplisit) + stealth detector "
+                    "defensif + lab lanjutan (netmon/credcheck/redsim/"
+                    "forensics)")
     parser.add_argument("-c", "--camera", type=int, default=0, help="index kamera (default: 0)")
     parser.add_argument("--headless", action="store_true", help="mode tanpa GUI: log gerakan ke CSV saja")
     parser.add_argument("-t", "--threshold", type=int, default=25, help="sensitivitas deteksi gerakan 5-100 (default: 25)")

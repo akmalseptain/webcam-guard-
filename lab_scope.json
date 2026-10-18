@@ -1,0 +1,5 @@
+{
+  "catatan": "Scope aset lab yang DIOTORIZASI. Semua modul emulasi (redsim) menolak target di luar daftar ini. CIDR 192.168.56.0/24 adalah subnet khas VirtualBox host-only lab; ubah sesuai jaringan lab Anda.",
+  "hosts": ["lab-01.local", "lab-02.local"],
+  "cidrs": ["192.168.56.0/24"]
+}

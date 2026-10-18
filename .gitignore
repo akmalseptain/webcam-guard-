@@ -1,6 +1,23 @@
+# Artefak runtime lab (jangan masuk repo)
+lab_events.jsonl
+lab_audit.jsonl
+cred_report.json
+sessions.csv
+events.csv
+lab-cert.pem
+lab-key.pem
+captures/
+forensic_report.txt
+events_export.csv
+
+# Artefak webcam (v1.0)
 recordings/
 snapshots/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
+.pytest_cache/
