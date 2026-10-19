@@ -10,8 +10,12 @@ Pemakaian:
     python demo_mirror.py
 
 Kontrol stream setelah jendela muncul: p jeda, r lanjut, q keluar.
-Ctrl-C di terminal mengakhiri seluruh sesi.
+Ctrl-C di terminal mengakhiri seluruh sesi. Menutup jendela stream dengan
+tombol X juga mengakhiri sesi (bukan memunculkan jendela baru tiap frame).
+Hanya SATU instance demo yang boleh jalan (mutex) — instance kedua
+menolak jalan agar jendela stream tidak menumpuk.
 """
+import json
 import os
 import re
 import subprocess
@@ -23,6 +27,72 @@ import mirror_stream
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HEX64 = re.compile(r"\b([0-9a-f]{64})\b")
+JUDUL = "WebCam Guard Mirror (lab — persetujuan aktif)"
+MUTEX_NAME = "Local\\webcam_guard_demo_mirror"
+
+
+def _kunci_satu_instance():
+    """Mutex Windows: satu-satunya instance demo yang boleh jalan.
+
+    Tanpa ini, demo kedua yang dijalankan bersamaan memunculkan jendela
+    stream kedua/ketiga — sumber 'jendela terlalu banyak'. Mutex dilepas
+    otomatis OS saat proses mati, jadi crash tidak mengunci selamanya.
+    Return: handle (boleh jalan), False (sudah ada instance lain),
+    None (non-Windows / mutex gagal dibuat — lanjut tanpa guard).
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = k32.CreateMutexW(None, False, MUTEX_NAME)
+    if not handle:
+        return None
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        return False
+    return handle
+
+
+def _matikan_sisa_windows():
+    """Matikan HANYA proses demo/server/viewer lama yang masih hidup.
+
+    Versi lalu: taskkill /IM python.exe membunuh SEMUA python di laptop
+    (IDE, agent CLI, jupyter) dan error-nya di-silent — kalau gagal,
+    sisa jendela stream menumpuk tanpa peringatan. Versi ini memilih PID
+    berdasarkan nama proses python* + command line skrip mirror, lalu
+    melaporkan tiap hasil secara jujur.
+    """
+    ps_cmd = (
+        "Get-CimInstance Win32_Process | Where-Object { "
+        "$_['Name'] -like 'python*' -and $_.CommandLine -match "
+        "'demo_mirror[.]py|mirror_server[.]py|mirror_viewer[.]py' } | "
+        "Select-Object ProcessId | ConvertTo-Json -Compress")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                           ps_cmd],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[demo] Pembersihan sisa dilewati: {e}")
+        return
+    if not r.stdout.strip():
+        return
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return
+    if isinstance(data, dict):
+        data = [data]
+    for p in data:
+        pid = p.get('ProcessId')
+        if not pid or int(pid) == os.getpid():
+            continue
+        k = subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, text=True)
+        if k.returncode == 0:
+            print(f"[demo] Sisa sesi lama dimatikan: PID {pid}")
+        else:
+            print(f"[demo] GAGAL mematikan PID {pid} "
+                  f"({(k.stderr or k.stdout).strip()}) — tutup manual "
+                  "jendela stream lama itu.")
 
 
 def _baris_server(proc, hasil):
@@ -75,6 +145,7 @@ def jalankan_viewer(pair, tok, fp):
     print("[demo] Kontrol jendela stream: p jeda | r lanjut | q keluar "
           "| Ctrl-C (terminal) akhiri sesi.\n")
     berhenti = False
+    jendela_ada = False
     try:
         while not berhenti:
             jenis, data = mirror_stream.terima_frame(sock)
@@ -82,8 +153,17 @@ def jalankan_viewer(pair, tok, fp):
                 img = cv2.imdecode(np.frombuffer(data, np.uint8),
                                    cv2.IMREAD_COLOR)
                 if img is not None:
-                    cv2.imshow("WebCam Guard Mirror (lab — persetujuan aktif)",
-                               img)
+                    # Tutup-X pengguna: akhiri sesi SEBELUM imshow
+                    # memunculkan jendela baru tiap frame.
+                    if jendela_ada and cv2.getWindowProperty(
+                            JUDUL, cv2.WND_PROP_VISIBLE) < 1:
+                        print("[demo] Jendela stream ditutup (X) — "
+                              "mengakhiri sesi.")
+                        mirror_stream.kirim_json(sock, {"cmd": "LEAVE"})
+                        berhenti = True
+                        continue
+                    cv2.imshow(JUDUL, img)
+                    jendela_ada = True
                     key = cv2.waitKey(30) & 0xFF
                     if key == ord("p"):
                         mirror_stream.kirim_json(sock, {"cmd": "PAUSE"})
@@ -122,13 +202,16 @@ def main():
     if not os.path.exists(srv_path):
         sys.exit("mirror_server.py tidak ditemukan di folder ini.")
 
-    # Matikan SEMUA proses python lain (server/viewer sisa run lalu).
-    # Proses demo ini sendiri dikecualikan via PID.
+    mutex = _kunci_satu_instance()
+    if mutex is False:
+        sys.exit("[demo] Demo mirror SUDAH berjalan di jendela lain. Akhiri "
+                 "sesi itu dulu (q di jendela stream / Ctrl-C di "
+                 "terminalnya), lalu jalankan lagi.")
+
+    # Matikan hanya proses demo/server/viewer LAMA — bukan semua
+    # python di laptop (lihat _matikan_sisa_windows).
     if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "python.exe",
-             "/FI", "PID ne " + str(os.getpid())],
-            capture_output=True)
+        _matikan_sisa_windows()
 
     print("[demo] Server menyala... tunggu jendela stream muncul.")
     proc = subprocess.Popen(
