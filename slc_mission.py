@@ -286,7 +286,18 @@ class MissionEngine:
                 l["error"] = ("aksi TINGGI dalam misi tanpa persetujuan "
                               "eksplisit — ditolak default")
                 return
-            self.control.berikutnya(l["dev"], sekarang=sekarang)
+            # v4.0.3: tandai TUGAS MILIK LANGKAH INI sebagai DIKIRIM —
+            # bukan berikutnya() yang mengambil tugas SIAP pertama pada
+            # dev yang sama (gelombang paralel saling mencuri tugas →
+            # cross-steal → KeyError di terima_hasil; terlihat di
+            # Windows native). kirim_tugas thread-safe & spesifik.
+            dikirim = self.control.kirim_tugas(l["dev"], t["tugas_id"],
+                                               sekarang=sekarang)
+            if dikirim is None:
+                l["status"] = "GAGAL"
+                l["error"] = ("tugas tidak siap dikirim (kedaluwarsa/"
+                              "dibatalkan/diambil proses lain) — jujur")
+                return
             misi.terpakai_langkah += 1
             try:
                 hasil = self.eksekusi(l["aksi"], l.get("params"))

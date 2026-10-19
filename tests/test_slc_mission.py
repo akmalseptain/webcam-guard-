@@ -249,6 +249,30 @@ class TestRaceRegression(Basis):
         self.assertEqual(m.langkah["l1"]["status"], "GAGAL_VERIFIKASI")
 
 
+class TestCrossStealParalel(Basis):
+    """v4.0.3: gelombang DAG paralel pada DEV YANG SAMA dulu saling
+    mencuri tugas lewat berikutnya() (tugas SIAP pertama, bukan milik
+    langkah sendiri) → tugas dibuang 'status aneh' → KeyError → GAGAL.
+    Terlihat di Windows native (timing lambat); kini kirim_tugas()
+    spesifik per tugas_id + lock antrean."""
+
+    def test_gelombang_paralel_dev_sama_tidak_cross_steal(self):
+        for _ in range(15):  # race: ulang agar interleaving tercakup
+            eng = MissionEngine(self.c, eksekusi=EKSEKUSI_OK)
+            m = self.misi([
+                {"id": "p1", "aksi": "kesehatan", "dev": self.a},
+                {"id": "p2", "aksi": "disk", "dev": self.a},
+                {"id": "p3", "aksi": "kesehatan", "dev": self.a},
+            ])
+            eng.jalankan(m)
+            for lid in ("p1", "p2", "p3"):
+                self.assertEqual(m.langkah[lid]["status"],
+                                 "SELESAI_TERVERIFIKASI",
+                                 f"iterasi gagal di {lid}: "
+                                 f"{m.langkah[lid].get('error')}")
+
+
+
 def misi_error(m):
     return m.error or ""
 

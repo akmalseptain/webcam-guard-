@@ -196,9 +196,11 @@ nyata; tidak dipalsukan).
 > `docs/RISK-MATRIX.md`, status NOT RUN, dan `docs/SLC-ACCEPTANCE-v4.0.md`).
 > Menjalankan suite di **Windows native**: test yang bergantung fitur
 > POSIX-only di-skip otomatis dengan alasan jujur (izin file 0o600/NTFS,
-> kolektor `/proc`, jaminan race-free `fcntl.flock`) — modul inti tetap
-> portable (`resource` di-guard; maxrss Windows via ctypes psapi, atau
-> dilaporkan None + catatan, TIDAK dipalsukan).
+> kolektor `/proc`) — modul inti tetap portable (`resource` di-guard;
+> maxrss Windows via ctypes psapi, atau dilaporkan None + catatan, TIDAK
+> dipalsukan). Race append audit kini aman IN-PROCESS di semua platform
+> (threading.Lock; test race thread tidak lagi di-skip di Windows);
+> jaminan LINTAS-PROSES tetap POSIX-only (`flock`, terdokumentasi).
 
 ### Benchmark (metode: `time.monotonic`, 1 warm-up + 3 run, median, sandbox bersama)
 

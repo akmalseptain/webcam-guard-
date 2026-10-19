@@ -55,6 +55,14 @@ try:
 except ImportError:  # Windows: fallback tanpa kunci lintas-proses
     _FCNTL_ADA = False
 
+import threading
+# Kunci IN-PROCESS: wajib di semua platform. flock hanya melindungi
+# lintas-PROSES di POSIX; konkurensi THREAD di dalam satu proses
+# (mis. mission engine gelombang paralel) dilindungi kunci ini.
+# v4.0.3: tanpa ini, audit append paralel di Windows (tanpa flock)
+# merusak hash-chain — terdeteksi sehat_audit sebagai RUSAK.
+_LOCK_UTAMA = threading.Lock()
+
 PBKDF2_ITER = 200_000
 # v2.0: rentang iterasi yang DIVALIDASI saat verify (anti-DoS parameter).
 PBKDF2_ITER_MIN = 1_000
@@ -78,21 +86,25 @@ IZIN = {
 # ------------------------------------------------------------
 @contextmanager
 def _kunci_file(path):
-    """Kunci eksklusif lintas-proses untuk `path` (file sidecar `path.lock`).
+    """Kunci eksklusif untuk `path` (file sidecar `path.lock`).
 
-    Di Windows fallback tanpa kunci (perilaku aman-secara-pesan: tetap
-    jalan tapi TANPA jaminan konkurensi lintas proses).
+    Dua lapis: (1) kunci IN-PROCESS (threading.Lock) — semua platform,
+    melindungi konkurensi thread dalam satu proses; (2) flock — hanya
+    POSIX, melindungi lintas proses. Di Windows setelah lapis (1)
+    berlaku, fallback tetap TANPA jaminan lintas proses (jujur,
+    terdokumentasi README).
     """
-    lock_path = f"{path}.lock"
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        if _FCNTL_ADA:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        if _FCNTL_ADA:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+    with _LOCK_UTAMA:
+        lock_path = f"{path}.lock"
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if _FCNTL_ADA:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if _FCNTL_ADA:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 def _entry_terakhir(path, tail=8192):

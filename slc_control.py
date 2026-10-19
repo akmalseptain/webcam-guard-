@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import time
 
 import audit_core
@@ -63,6 +64,10 @@ class SLCControl:
         self.last_seen = {}
         self._emergency = set()  # dev_id yang di-emergency-stop
         self._dibatalkan = set()  # tugas_id yang dibatalkan operator
+        # v4.0.3: kunci antrean/thread-safety — gelombang misi paralel
+        # memutasi _antrean/history dari >1 thread (di Windows race ini
+        # menyebabkan cross-steal tugas antar langkah).
+        self._kunci = threading.RLock()
 
     # ---------------- meta (grup/tag/policy) ----------------
     def _muat(self, path):
@@ -200,44 +205,80 @@ class SLCControl:
         """POLL perangkat: ambil tugas SIAP berikutnya; tugas kedaluwarsa
         dibuang jujur dengan status KEDALUWARSA."""
         sekarang = time.time() if sekarang is None else sekarang
-        self.last_seen[dev_id] = now_ts()
-        q = self._antrean.get(dev_id, [])
-        while q:
-            t = q[0]
-            if t["status"] == "MENUNGGU_PERSETUJUAN":
-                return None  # jangan bocorkan tugas yang belum disetujui
-            if t["status"] == "SIAP" and sekarang > t["kedaluwarsa"]:
-                q.pop(0)
-                t["status"] = "KEDALUWARSA"
-                self.history.append(t)
-                self.audit.append("controller", "SLC_TUGAS_KEDALUWARSA",
-                                  t["tugas_id"])
-                continue
-            if t["status"] == "SIAP" and t["tugas_id"] in self._dibatalkan:
-                q.pop(0)
-                t["status"] = "DIBATALKAN"
-                self.history.append(t)
-                continue
-            if t["status"] == "SIAP":
-                t["status"] = "DIKIRIM"
-                return t
-            q.pop(0)  # status aneh → buang jujur
-        return None
+        with self._kunci:
+            self.last_seen[dev_id] = now_ts()
+            q = self._antrean.get(dev_id, [])
+            while q:
+                t = q[0]
+                if t["status"] == "MENUNGGU_PERSETUJUAN":
+                    return None  # jangan bocorkan tugas yang belum disetujui
+                if t["status"] == "SIAP" and sekarang > t["kedaluwarsa"]:
+                    q.pop(0)
+                    t["status"] = "KEDALUWARSA"
+                    self.history.append(t)
+                    self.audit.append("controller", "SLC_TUGAS_KEDALUWARSA",
+                                      t["tugas_id"])
+                    continue
+                if t["status"] == "SIAP" and t["tugas_id"] in self._dibatalkan:
+                    q.pop(0)
+                    t["status"] = "DIBATALKAN"
+                    self.history.append(t)
+                    continue
+                if t["status"] == "SIAP":
+                    t["status"] = "DIKIRIM"
+                    return t
+                q.pop(0)  # status aneh → buang jujur
+            return None
+
+    def kirim_tugas(self, dev_id, tugas_id, sekarang=None):
+        """v4.0.3: tandai TUGAS SPESIFIK sebagai DIKIRIM (thread-safe).
+
+        Untuk mission engine gelombang PARALEL: berikutnya() mengambil
+        tugas SIAP *pertama* pada dev yang sama, sehingga dua langkah
+        paralel saling mencuri tugas (cross-steal) lalu membuangnya di
+        branch 'status aneh'. kirim_tugas() hanya menyentuh tugas milik
+        langkahnya sendiri. Return tugas, atau None bila tidak siap /
+        kedaluwarsa / dibatalkan (pemanggil melaporkan jujur)."""
+        sekarang = time.time() if sekarang is None else sekarang
+        with self._kunci:
+            for q_i, q in enumerate(self._antrean.values()):
+                for idx, t in enumerate(q):
+                    if t["tugas_id"] != tugas_id:
+                        continue
+                    if t["status"] == "MENUNGGU_PERSETUJUAN":
+                        return None
+                    if sekarang > t["kedaluwarsa"]:
+                        q.pop(idx)
+                        t["status"] = "KEDALUWARSA"
+                        self.history.append(t)
+                        self.audit.append("controller",
+                                          "SLC_TUGAS_KEDALUWARSA", tugas_id)
+                        return None
+                    if t["tugas_id"] in self._dibatalkan:
+                        q.pop(idx)
+                        t["status"] = "DIBATALKAN"
+                        self.history.append(t)
+                        return None
+                    if t["status"] == "SIAP":
+                        t["status"] = "DIKIRIM"
+                    return t
+            return None
 
     def terima_hasil(self, dev_id, tugas_id, hasil, sekarang=None):
         """Terima HASIL dari perangkat: verifikasi postcondition NYATA,
         bukan sekadar 'eksekusi selesai'."""
-        self.last_seen[dev_id] = now_ts()
-        t = None
-        for q in self._antrean.values():
-            for i, tt in enumerate(q):
-                if tt["tugas_id"] == tugas_id:
-                    t = q.pop(i)
-                    break
-        if t is None:
-            t = self._cari_tugas(tugas_id)
+        with self._kunci:  # v4.0.3: pop antrean + history thread-safe
+            self.last_seen[dev_id] = now_ts()
+            t = None
+            for q in self._antrean.values():
+                for i, tt in enumerate(q):
+                    if tt["tugas_id"] == tugas_id:
+                        t = q.pop(i)
+                        break
             if t is None:
-                raise KeyError(f"tugas tidak dikenal: {tugas_id}")
+                t = self._cari_tugas(tugas_id)
+                if t is None:
+                    raise KeyError(f"tugas tidak dikenal: {tugas_id}")
         gagal = bool((hasil or {}).get("error"))
         t["selesai"] = now_ts()
         if gagal:
