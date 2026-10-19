@@ -12,6 +12,25 @@ Panduan instalasi, mode operasi, dan langkah demo UTS.
 
 ## 2. Mode DEMO (tanpa perangkat fisik)
 
+**Cara tercepat melihat seluruh alur NYATA (1 perintah, TCP loopback betulan):**
+
+```
+python3 slc_lab.py
+```
+
+Menjalankan dalam SATU proses: enroll → server TCP → agent loopback
+(socket NYATA) → 3 tugas dieksekusi endpoint-side & terverifikasi →
+emergency stop → misi MissionEngine (state penuh + laporan) →
+integritas audit hash-chain.
+
+> PENTING (batas arsitektur, jujur): antrean tugas & `last_seen` SLCControl
+> hidup **di memori proses server**. Menjadwalkan tugas dari terminal/proses
+> TERPISAH tidak pernah sampai ke agent. Demo TCP end-to-end karena itu
+> harus dalam satu proses — `slc_lab.py`. (`slc_demo.py --demo` = data
+> sintetis berlabel; `slc_lab.py` = telemetri nyata mesin ini.)
+
+Data sintetis berlabel (untuk latihan pemeriksaan UI):
+
 ```
 python3 slc_demo.py --demo
 python3 slc_demo.py --evaluasi --tulis laporan.md   # laporan acceptance
