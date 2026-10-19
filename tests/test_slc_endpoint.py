@@ -14,11 +14,13 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from range_registry import buat_mac, DeviceRegistry  # noqa: E402
 from slc_control import SLCControl  # noqa: E402
 import slc_server  # noqa: E402
+import slc_actions  # noqa: E402  (v4.0.1: stub pengukuran utk test limit)
 from slc_endpoint import (SLCEndpoint, TransportLokal, TransportTCP,
                           TransportError, CARA_INSTALL)  # noqa: E402
 
@@ -73,9 +75,14 @@ class TestAgentUnit(unittest.TestCase):
         self.assertEqual(self.agent.siklus()["status"], "BERHENTI")
 
     def test_limit_sumber_daya_dijaga(self):
-        self.agent.limits = {"maxrss_kb": 1}  # pasti terlampaui
-        self.c.jadwalkan("admin", self.rec["id"], "kesehatan")
-        self.agent.siklus()
+        # v4.0.1: pengukuran di-stub agar test DETERMINISTIK di semua
+        # platform (Linux getrusage / Windows psapi) — yang diuji adalah
+        # LOGIKA PENEGAKAN limit, bukan API pengukuran OS.
+        with mock.patch.object(slc_actions, "kumpul_res_agent",
+                               return_value={"maxrss_kb": 999_999_999}):
+            self.agent.limits = {"maxrss_kb": 1}  # pasti terlampaui
+            self.c.jadwalkan("admin", self.rec["id"], "kesehatan")
+            self.agent.siklus()
         t = self.c.history[-1]
         self.assertEqual(t["status"], "GAGAL")
         self.assertIn("limit sumber daya", t["hasil"]["error"])

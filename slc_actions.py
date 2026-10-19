@@ -105,38 +105,58 @@ def kumpul_res_agent():
         return {"maxrss_kb": ru.ru_maxrss, "cpu_user_s": round(ru.ru_utime, 3),
                 "cpu_sys_s": round(ru.ru_stime, 3)}
     if platform.system() == "Windows":
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            class _PMC(ctypes.Structure):
-                _fields_ = [
-                    ("cb", wintypes.DWORD),
-                    ("PageFaultCount", wintypes.DWORD),
-                    ("PeakWorkingSetSize", ctypes.c_size_t),
-                    ("WorkingSetSize", ctypes.c_size_t),
-                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                    ("PagefileUsage", ctypes.c_size_t),
-                    ("PeakPagefileUsage", ctypes.c_size_t),
-                ]
-            pmc = _PMC()
-            pmc.cb = ctypes.sizeof(_PMC)
-            h = ctypes.windll.kernel32.GetCurrentProcess()
-            if ctypes.windll.psapi.GetProcessMemoryInfo(
-                    h, ctypes.byref(pmc), pmc.cb):
-                return {"maxrss_kb": int(pmc.PeakWorkingSetSize // 1024),
-                        "cpu_user_s": round(time.process_time(), 3),
-                        "cpu_sys_s": None,
-                        "catatan": "Windows: PeakWorkingSetSize (psapi); "
-                                   "cpu_sys tidak tersedia di Windows"}
-        except Exception:  # pragma: no cover - fallback jujur
-            pass
+        m = _maxrss_windows_kb()
+        if m is not None:
+            return {"maxrss_kb": m,
+                    "cpu_user_s": round(time.process_time(), 3),
+                    "cpu_sys_s": None,
+                    "catatan": "Windows: PeakWorkingSetSize; cpu_sys tidak "
+                               "tersedia di Windows"}
     return {"maxrss_kb": None, "cpu_user_s": round(time.process_time(), 3),
             "cpu_sys_s": None,
             "catatan": "pengukuran maxrss tidak tersedia di platform ini"}
+
+
+def _maxrss_windows_kb():
+    """maxrss (PeakWorkingSetSize, KB) di Windows via ctypes (stdlib-only).
+
+    v4.0.1: dua jalur — psapi.GetProcessMemoryInfo lalu fallback
+    kernel32.K32GetProcessMemoryInfo (Vista+); mengembalikan None jujur
+    bila keduanya gagal (TIDAK dipalsukan).
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _PMC(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+        pmc = _PMC()
+        pmc.cb = ctypes.sizeof(_PMC)
+        h = ctypes.windll.kernel32.GetCurrentProcess()
+        for lib, fn in (("psapi", "GetProcessMemoryInfo"),
+                        ("kernel32", "K32GetProcessMemoryInfo")):
+            try:
+                getter = getattr(ctypes.windll, lib)
+                fungsi = getattr(getter, fn, None)
+                if fungsi is not None and \
+                        fungsi(h, ctypes.byref(pmc), pmc.cb):
+                    return int(pmc.PeakWorkingSetSize // 1024)
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
 
 
 def _ps(args, timeout=15):
@@ -148,10 +168,20 @@ def _ps(args, timeout=15):
     return out.stdout.strip()[:4000]
 
 
+# Whitelist event log — dicek di SEMUA platform SEBELUM eksekusi
+# (v4.0.1: dulu hanya dicek di branch POSIX, sehingga di Windows nama log
+# apa pun diteruskan ke Get-WinEvent — kini konsisten & tolak-default).
+EVENTLOG_DIIZINKAN = ("System", "Application", "Security",
+                      "lab_audit.jsonl", "lab_events.jsonl",
+                      "lab_range_events.jsonl")
+
+
 def baca_eventlog(nama, batas=50):
     """Baca event log yang DISETUJUI (whitelist). Windows: Get-WinEvent;
     POSIX (dev/CI): baris log teks dari file terdaftar. Sintetis tidak pernah
     dihasilkan di sini — bila sumber tidak ada, dikembalikan sebagai None jujur."""
+    if nama not in EVENTLOG_DIIZINKAN:
+        raise PermissionError(f"log '{nama}' tidak ada di whitelist")
     if IS_WINDOWS:
         out = _ps([f"Get-WinEvent -LogName {nama} -MaxEvents {int(batas)} "
                    f"| ConvertTo-Json -Compress"])
@@ -159,11 +189,8 @@ def baca_eventlog(nama, batas=50):
             return json.loads(out) if out else []
         except json.JSONDecodeError:
             return {"raw": out}  # jangan dibuang, jangan dipalsukan
-    # POSIX: whitelist file log lab
+    # POSIX: file log lab
     from pathlib import Path
-    diizinkan = {"lab_audit.jsonl", "lab_events.jsonl", "lab_range_events.jsonl"}
-    if nama not in diizinkan:
-        raise PermissionError(f"log '{nama}' tidak ada di whitelist")
     p = Path(nama)
     if not p.exists():
         return None  # TIDAK ADA BUKAN BERARTI AMAN — None jujur
