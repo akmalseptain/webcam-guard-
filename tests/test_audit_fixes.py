@@ -25,6 +25,18 @@ import netmon
 # A-01: race condition append lintas-proses (kini flock)
 # ------------------------------------------------------------
 class TestRaceCondition(unittest.TestCase):
+    """A-01: tanpa flock lintas-proses, append paralel merusak rantai.
+
+    Catatan jujur: penguncian memakai fcntl.flock — POSIX-only. Di Windows
+    audit_core memakai fallback TANPA kunci lintas-proses (terdokumentasi),
+    jadi jaminan race-free ini tidak diuji di Windows (di-skip, bukan
+    diklaim lulus).
+    """
+
+    _skip_flock = unittest.skipIf(
+        os.name != "posix",
+        "POSIX-only: jaminan race-free bergantung fcntl.flock")
+
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.path = os.path.join(self.dir.name, "audit.jsonl")
@@ -32,6 +44,7 @@ class TestRaceCondition(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
+    @_skip_flock
     def test_race_audit_2_proses(self):
         # DULU: 2 proses x append -> rantai rusak. KINI: flock -> utuh.
         log1 = audit_core.AuditLog(self.path)
@@ -47,6 +60,7 @@ class TestRaceCondition(unittest.TestCase):
         seqs = sorted(e["seq"] for e in log.entries())
         self.assertEqual(seqs, list(range(1, 61)))  # seq kontinu 1..60
 
+    @_skip_flock
     def test_race_event_2_proses(self):
         path = os.path.join(self.dir.name, "events.jsonl")
         s1 = forensics.EventStore(path)

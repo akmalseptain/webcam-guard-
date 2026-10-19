@@ -192,6 +192,11 @@ nyata; tidak dipalsukan).
 > nyata), fitur kamera OpenCV, instalasi layanan Windows fisik, dan
 > `pip-audit`/SBOM diverifikasi manual di laptop owner (lihat
 > `docs/RISK-MATRIX.md`, status NOT RUN, dan `docs/SLC-ACCEPTANCE-v4.0.md`).
+> Menjalankan suite di **Windows native**: test yang bergantung fitur
+> POSIX-only di-skip otomatis dengan alasan jujur (izin file 0o600/NTFS,
+> kolektor `/proc`, jaminan race-free `fcntl.flock`) — modul inti tetap
+> portable (`resource` di-guard; maxrss Windows via ctypes psapi, atau
+> dilaporkan None + catatan, TIDAK dipalsukan).
 
 ### Benchmark (metode: `time.monotonic`, 1 warm-up + 3 run, median, sandbox bersama)
 

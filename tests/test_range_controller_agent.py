@@ -97,6 +97,9 @@ class TestOperatorStore(unittest.TestCase):
                              iterasi=ITER_TEST)
         self.assertEqual(ops2.authenticate("admin", "pw"), "admin")
 
+    @unittest.skipIf(os.name != "posix",
+                     "POSIX-only: izin file 0o600 (chmod) tidak berlaku "
+                     "di NTFS — batas terdokumentasi README")
     def test_operators_json_0600(self):
         self.ops.add_user("admin", "pw", "admin")
         mode = stat.S_IMODE(os.stat(self.ops_file).st_mode)
@@ -263,19 +266,32 @@ class TestControllerWhitelist(Basis):
 
 
 class TestAgentKolektor(unittest.TestCase):
-    """Kolektor agent: bentuk output & sifat read-only (whitelist)."""
+    """Kolektor agent: bentuk output & sifat read-only (whitelist).
 
+    Catatan jujur: kumpul_proses/kumpul_koneksi/kumpul_health membaca
+    /proc (Linux-only). Di Windows mereka mengembalikan data kosong yang
+    dilabeli, JADI test /proc di-skip (bukan dipaksakan lulus).
+    """
+
+    _skip_proc = unittest.skipIf(
+        os.name != "posix",
+        "POSIX-only: kolektor membaca /proc (tidak ada di Windows; "
+        "lihat range_agent.py)")
+
+    @_skip_proc
     def test_proses_ada_pid(self):
         hasil = range_agent.kumpul_proses(batas=20)
         self.assertTrue(hasil)
         self.assertIn("pid", hasil[0])
         self.assertIn("ppid", hasil[0])
 
+    @_skip_proc
     def test_pohon_proses(self):
         p = range_agent.pohon_proses()
         self.assertIn("n", p)
         self.assertGreater(p["n"], 0)
 
+    @_skip_proc
     def test_koneksi_kolom_inode(self):
         hasil = range_agent.kumpul_koneksi()
         for k in hasil:
@@ -287,11 +303,13 @@ class TestAgentKolektor(unittest.TestCase):
         self.assertTrue(alamat.startswith("127.0.0.1"))
         self.assertIn("8080", alamat)
 
+    @_skip_proc
     def test_health(self):
         h = range_agent.kumpul_health()
         self.assertEqual(h["agent"], "range-agent-v3")
         self.assertGreater(h["n_pid"], 0)
 
+    @_skip_proc
     def test_priv_suid_ditemukan(self):
         p = range_agent.kumpul_priv()
         self.assertIn("suid_ditemukan", p)

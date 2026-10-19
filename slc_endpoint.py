@@ -35,8 +35,6 @@ import ssl
 import sys
 import time
 
-import resource
-
 import slc_actions
 
 VERSII_AGENT = "4.0.0"
@@ -197,10 +195,17 @@ class SLCEndpoint:
     def dalam_batas(self):
         if not self.limits:
             return True, None
-        ru = resource.getrusage(resource.RUSAGE_SELF)
         maks = self.limits.get("maxrss_kb")
-        if maks and ru.ru_maxrss > maks:
-            return False, f"maxrss {ru.ru_maxrss}KB > batas {maks}KB"
+        if maks:
+            res = slc_actions.kumpul_res_agent()
+            m = res.get("maxrss_kb")
+            if m is None:
+                # jujur: maxrss tak terukur di platform ini — batas
+                # TIDAK dianggap terpenuhi maupun dilanggar
+                return True, ("maxrss tidak terukur di platform ini "
+                              f"({res.get('catatan', '?')})")
+            if m > maks:
+                return False, f"maxrss {m}KB > batas {maks}KB"
         return True, None
 
     # ---------------- siklus ----------------

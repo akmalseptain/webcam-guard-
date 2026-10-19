@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import json
 import platform
-import resource
 import shutil
 import subprocess
 import time
+
+try:
+    import resource  # POSIX-only
+    _RESOURCE_ADA = True
+except ImportError:  # Windows: modul stdlib `resource` tidak tersedia
+    _RESOURCE_ADA = False
 
 RISIKO = ("RENDAH", "SEDANG", "TINGGI")
 IS_WINDOWS = platform.system() == "Windows"
@@ -89,10 +94,49 @@ def kumpul_disk(path="/"):
 
 
 def kumpul_res_agent():
-    """Pemakaian sumber daya agent saat ini (rusage, maxrss KB)."""
-    ru = resource.getrusage(resource.RUSAGE_SELF)
-    return {"maxrss_kb": ru.ru_maxrss, "cpu_user_s": round(ru.ru_utime, 3),
-            "cpu_sys_s": round(ru.ru_stime, 3)}
+    """Pemakaian sumber daya agent saat ini (maxrss KB).
+
+    POSIX: getrusage. Windows: PeakWorkingSetSize via ctypes psapi
+    (stdlib-only, tanpa pip). Bila tak terukur, dilaporkan None + catatan
+    (jujur — TIDAK dipalsukan).
+    """
+    if _RESOURCE_ADA:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        return {"maxrss_kb": ru.ru_maxrss, "cpu_user_s": round(ru.ru_utime, 3),
+                "cpu_sys_s": round(ru.ru_stime, 3)}
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class _PMC(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+            pmc = _PMC()
+            pmc.cb = ctypes.sizeof(_PMC)
+            h = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                    h, ctypes.byref(pmc), pmc.cb):
+                return {"maxrss_kb": int(pmc.PeakWorkingSetSize // 1024),
+                        "cpu_user_s": round(time.process_time(), 3),
+                        "cpu_sys_s": None,
+                        "catatan": "Windows: PeakWorkingSetSize (psapi); "
+                                   "cpu_sys tidak tersedia di Windows"}
+        except Exception:  # pragma: no cover - fallback jujur
+            pass
+    return {"maxrss_kb": None, "cpu_user_s": round(time.process_time(), 3),
+            "cpu_sys_s": None,
+            "catatan": "pengukuran maxrss tidak tersedia di platform ini"}
 
 
 def _ps(args, timeout=15):

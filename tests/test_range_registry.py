@@ -92,6 +92,9 @@ class TestPersistensi(unittest.TestCase):
     def tearDown(self):
         self.d.cleanup()
 
+    @unittest.skipIf(os.name != "posix",
+                     "POSIX-only: izin file 0o600 (chmod) tidak berlaku "
+                     "di NTFS — batas terdokumentasi README")
     def test_devices_json_izin_0600(self):
         reg = DeviceRegistry(self.file, self.audit)
         reg.enroll("vm-a")
