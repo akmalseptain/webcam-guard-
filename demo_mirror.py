@@ -66,9 +66,13 @@ def main():
     # python yang memiliki jendela berjudul 'WebCam Guard Mirror*');
     # proses demo ini sendiri tidak kena filter WINDOWTITLE.
     if sys.platform == "win32":
+        # Matikan SEMUA proses python LAIN (server/viewer sisa run lalu)
+        # — kecuali proses demo ini sendiri (PID ne). Filter WINDOWTITLE
+        # terbukti kurang ampuh: judul jendela mengandung karakter
+        # spesial dan taskkill tidak selalu cocok; PID filter pasti kena.
         subprocess.run(
             ["taskkill", "/F", "/IM", "python.exe",
-             "/FI", "WINDOWTITLE eq WebCam Guard Mirror*"],
+             "/FI", "PID ne " + str(os.getpid())],
             capture_output=True)
 
     print("[demo] Server menyala... tunggu jendela stream muncul.")
