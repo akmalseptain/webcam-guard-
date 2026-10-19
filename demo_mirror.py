@@ -62,6 +62,15 @@ def main():
     if not os.path.exists(srv_path):
         sys.exit("mirror_server.py tidak ditemukan di folder ini.")
 
+    # Bersihkan jendela viewer sisa dari run sebelumnya (hanya proses
+    # python yang memiliki jendela berjudul 'WebCam Guard Mirror*');
+    # proses demo ini sendiri tidak kena filter WINDOWTITLE.
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "python.exe",
+             "/FI", "WINDOWTITLE eq WebCam Guard Mirror*"],
+            capture_output=True)
+
     print("[demo] Server menyala... tunggu jendela stream muncul.")
     proc = subprocess.Popen(
         [sys.executable, "-u", srv_path],
