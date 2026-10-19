@@ -27,7 +27,7 @@ import mirror_stream
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HEX64 = re.compile(r"\b([0-9a-f]{64})\b")
-JUDUL = "WebCam Guard Mirror (lab — persetujuan aktif)"
+JUDUL = "WebCam Guard Mirror (lab - persetujuan aktif)"
 MUTEX_NAME = "Local\\webcam_guard_demo_mirror"
 
 

@@ -104,7 +104,7 @@ def main():
                 img = cv2.imdecode(np.frombuffer(data, np.uint8),
                                    cv2.IMREAD_COLOR)
                 if img is not None:
-                    cv2.imshow("WebCam Guard Mirror (lab — persetujuan aktif)",
+                    cv2.imshow("WebCam Guard Mirror (lab - persetujuan aktif)",
                                img)
                     key = cv2.waitKey(30) & 0xFF
                     if key == ord("p"):
