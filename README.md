@@ -40,6 +40,7 @@ engine scope-enforced, dan laporan before/after. Dokumentasi utama:
 | Remediasi 12 langkah | `slc_remediation.py` | Temuan→bukti→proposal→risiko→inspeksi diff→tes→persetujuan→checkpoint→terapkan→verifikasi→rollback→catat; zona larangan (kebijakan keamanan/akun/firewall/konfigurasi kritis) WAJIB `recovery_plan` tertulis |
 | Horror Command Center | `slc_ui.py` | Persona "SANG PENJAGA" + frame horor severity-driven yang SELALU menyatakan "administrasi jarak jauh — BUKAN tersembunyi", tombol EMERGENCY STOP selalu tampil, peta lab, grafik aktivitas, timeline jujur (TIDAK ADA DATA), misi replay, investigasi insiden, dasbor; kontrol gerak-minim/bisu/mode-polos |
 | Mode DEMO UTS | `slc_demo.py` | 3 perangkat SINTETIS berlabel `SINTETIS-DEMO (bukan perangkat nyata)`, misi inventaris end-to-end, `--evaluasi` laporan acceptance; tidak pernah memalsukan perangkat/hasil/alert |
+| Demo lab 1-perintah | `slc_lab.py` | End-to-end dalam SATU proses: server TCP + agent loopback (socket NYATA) + 3 tugas endpoint-side terverifikasi + emergency stop + misi MissionEngine + integritas audit. Penting: antrean tugas hidup di memori proses server — menjadwalkan dari terminal terpisah TIDAK sampai ke agent; `slc_lab.py` adalah cara benar demo TCP |
 
 ## Fitur v3.0 (tetap — lapisan cyber range)
 
@@ -112,6 +113,7 @@ Live capture butuh `tcpdump`/`tshark`/`dumpcap` (dicek saat runtime).
 
 ```bash
 # --- SLC v4.0 (controller → agent Windows → misi → demo) ---
+python3 slc_lab.py                                # demo lab end-to-end SATU perintah (TCP loopback nyata)
 python3 slc_server.py --host 0.0.0.0 --port 9443 [--cert cert.pem --key key.pem]
 python3 slc_endpoint.py --install-layanan        # cetak prosedur layanan SLCAgent
 python3 slc_endpoint.py --host <ctrl> --id DEV-XXXX --kunci <enroll> [--tls --pin <sha256>]

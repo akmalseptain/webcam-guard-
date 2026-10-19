@@ -133,6 +133,13 @@ jobs:
         run: |
           python3 slc_demo.py --demo | grep -q "SINTETIS-DEMO"
 
+      - name: SLC lab end-to-end — TCP loopback nyata + misi
+        run: |
+          python3 slc_lab.py | tee /tmp/slc-ci/lab.txt
+          grep -q "SELESAI_TERVERIFIKASI" /tmp/slc-ci/lab.txt
+          grep -q "emergency stop bekerja" /tmp/slc-ci/lab.txt
+          grep -q "UTUH" /tmp/slc-ci/lab.txt
+
       - name: SLC acceptance report — suite penuh harus hijau
         run: |
           python3 slc_demo.py --evaluasi --tulis /tmp/slc-ci/acceptance.md
