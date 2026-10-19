@@ -214,6 +214,41 @@ class TestAlurMisi(Basis):
             self.assertEqual(l["status"], "SELESAI_TERVERIFIKASI")
 
 
+class TestRaceRegression(Basis):
+    """v4.0.2: dua race yang ditemukan di Windows native (slc_lab).
+    1) tugas misi DICURI dari antrean (agent POLL) → terima_hasil
+       KeyError → HARUS dilaporkan GAGAL jujur, bukan crash.
+    2) retry langkah setelah GAGAL_VERIFIKASI → jadwalkan idem
+       mengembalikan task berstatus akhir → tidak boleh dieksekusi
+       ulang (dulu KeyError crash)."""
+
+    def test_terima_hasil_dicuri_tidak_crash(self):
+        # engine menandai tugas DIKIRIM (berikutnya), lalu saat engine
+        # mengeksekusi, POLL dari "proses lain" (thread server agent)
+        # datang → berikutnya() membuang tugas DIKIRIM dari antrean
+        # TANPA jejak → terima_hasil engine → KeyError (dulu: crash).
+        # HARUS dilaporkan GAGAL jujur.
+        def eksek(aksi, params):
+            self.c.berikutnya(self.a)  # POLL proses lain: DIKIRIM dibuang
+            return {"aksi": aksi, "data": {"platform": "x"}}
+        eng = MissionEngine(self.c, eksekusi=eksek)
+        m = self.misi([{"id": "l1", "aksi": "kesehatan", "dev": self.a}])
+        eng.jalankan(m)  # dulu: KeyError crash di _jalankan_langkah
+        l = m.langkah["l1"]
+        self.assertEqual(l["status"], "GAGAL")
+        self.assertIn("HASIL DITOLAK", l["error"])
+
+    def test_retry_setelah_gagal_verifikasi_tidak_keyerror(self):
+        # verifikasi selalu gagal → langkah GAGAL_VERIFIKASI → retry
+        # dulu crash KeyError karena jadwalkan idem balikin task akhir
+        def eksek(aksi, params):
+            return {"aksi": aksi, "data": {"platform": None}}  # verif gagal
+        eng = MissionEngine(self.c, eksekusi=eksek)
+        m = self.misi([{"id": "l1", "aksi": "kesehatan", "dev": self.a}])
+        eng.jalankan(m)  # dulu: KeyError 'tugas tidak dikenal' di retry
+        self.assertEqual(m.langkah["l1"]["status"], "GAGAL_VERIFIKASI")
+
+
 def misi_error(m):
     return m.error or ""
 

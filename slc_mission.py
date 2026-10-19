@@ -271,6 +271,16 @@ class MissionEngine:
                 l["status"] = "GAGAL"
                 l["error"] = f"DITOLAK: {e}"
                 return
+            # v4.0.2: idempotensi bisa mengembalikan tugas yang SUDAH
+            # berstatus akhir (mis. GAGAL_VERIFIKASI saat retry). Task
+            # itu sudah tidak di antrean — dieksekusi ulang hanya akan
+            # KeyError di terima_hasil. Dilaporkan jujur, tidak crash.
+            if t["status"] in ("SELESAI_TERVERIFIKASI", "GAGAL_VERIFIKASI",
+                              "GAGAL"):
+                l["status"] = t["status"]
+                l["error"] = ("langkah idempoten sudah berstatus akhir "
+                              f"({t['status']}) — tidak dieksekusi ulang")
+                return
             if t["status"] == "MENUNGGU_PERSETUJUAN":
                 l["status"] = "GAGAL"
                 l["error"] = ("aksi TINGGI dalam misi tanpa persetujuan "
@@ -291,8 +301,16 @@ class MissionEngine:
                 l["status"] = "KEDALUWARSA"
                 misi.error = "DEADLINE_MISI_TERLAMPAUI"
                 return
-            selesai = self.control.terima_hasil(l["dev"], t["tugas_id"],
-                                                hasil, sekarang=sekarang)
+            try:
+                # v4.0.2: tugas bisa diambil proses lain (agent POLL
+                # race) / kedaluwarsa — KeyError dilaporkan jujur.
+                selesai = self.control.terima_hasil(
+                    l["dev"], t["tugas_id"], hasil, sekarang=sekarang)
+            except KeyError as e:
+                l["status"] = "GAGAL"
+                l["error"] = (f"HASIL DITOLAK controller: {e} — tugas "
+                              "diambil proses lain atau kedaluwarsa")
+                return
             l["status"] = selesai["status"]
             if l["status"] == "SELESAI_TERVERIFIKASI":
                 return

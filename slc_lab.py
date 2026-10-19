@@ -127,10 +127,18 @@ def jalankan_lab(direktori=None, host="127.0.0.1", interval=0.2,
     cetak("[C] emergency stop dilepas — perangkat aktif kembali")
 
     # matikan agent sebelum fase misi (antrean misi dikelola engine
-    # in-process; agent aktif akan berebut POLL — DIBEKUKAN jujur)
+    # in-process; agent aktif akan MENCURI tugas misi dari antrean POLL —
+    # race ini ditemukan di Windows: siklus agent tertinggal bersamaan
+    # dengan misi → KeyError terima_hasil. Karena itu: JOIN thread, bukan
+    # sekadar flag).
     agent.shutdown()
-    tunggu(lambda: agent.berhenti, timeout=5)
-    cetak("[C] agent graceful shutdown (BYE terkirim)")
+    t_agent.join(timeout=15)
+    if t_agent.is_alive():
+        cetak("[C] PERINGATAN: thread agent belum berhenti setelah 15s — "
+              "misi berisiko race dengan POLL agent")
+    else:
+        cetak("[C] agent thread bergabung bersih (BYE terkirim, siklus "
+              "selesai — tidak ada POLL tersisa)")
 
     # ---------- FASE D: misi via MissionEngine ----------
     misi = Misi("Inventaris lab terjadwal (slc_lab)", [
