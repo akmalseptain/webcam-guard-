@@ -20,6 +20,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 import threading
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -79,6 +80,25 @@ def main():
                  "dalam 60 detik. Jalankan manual: python mirror_server.py")
 
     pair, tok, fp = hasil["pair"], hasil["tok"], hasil["fp"]
+
+    # Tunggu port server benar-benar terbuka sebelum viewer connect
+    # (token dicetak server SEBELUM listen — dulu viewer langsung
+    # diluncurkan dan koneksi ditolak).
+    import socket as _s
+    print("[demo] Menunggu server siap ...")
+    for _ in range(60):
+        try:
+            c = _s.create_connection(("127.0.0.1", 8443), timeout=1)
+            c.close()
+            break
+        except OSError:
+            if proc.poll() is not None:
+                sys.exit("[demo] Server mati mendadak sebelum listening. "
+                         "Jalankan manual: python mirror_server.py")
+            time.sleep(1)
+    else:
+        proc.kill()
+        sys.exit("[demo] Port 8443 tidak terbuka dalam 60 detik.")
 
     viewer = subprocess.Popen(
         [sys.executable, os.path.join(BASE, "mirror_viewer.py"), pair,
