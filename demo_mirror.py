@@ -1,39 +1,32 @@
-"""Demo mirroring SATU PERINTAH (lab 1 PC).
+"""Demo mirroring SATU PERINTAH + SATU JENDELA (lab 1 PC).
 
-Menjalankan mirror_server.py di subprocess, menjawab prompt persetujuan
-otomatis (SETUJU + y), MEMBACA kode pairing / token VIEWER / fingerprint
-langsung dari output server (tidak ada salin-tempel manual), lalu
-menjalankan mirror_viewer.py dengan nilai yang benar.
+Menjalankan mirror_server.py sebagai subprocess, menjawab prompt
+persetujuan otomatis (SETUJU + y), MEMBACA kode pairing / token VIEWER /
+fingerprint langsung dari output server, lalu menjalankan logika viewer
+DI DALAM proses ini (bukan subprocess) — sehingga jendela stream tidak
+pernah yatim: Ctrl-C di terminal mematikan server DAN stream bersama.
 
 Pemakaian:
     python demo_mirror.py
 
-Kontrol viewer setelah jendela muncul: p jeda, r lanjut, s stop, q keluar.
-Tutup dengan Ctrl-C untuk mengakhiri sesi (server ikut dimatikan).
-
-Catatan keamanan: nilai tetap dipertukarkan melalui stdout server di
-mesin yang sama (loopback) — token TIDAK ditulis ke file, tetap hanya
-di memori sesi.
+Kontrol stream setelah jendela muncul: p jeda, r lanjut, q keluar.
+Ctrl-C di terminal mengakhiri seluruh sesi.
 """
 import os
 import re
-import signal
 import subprocess
 import sys
-import time
 import threading
+import time
+
+import mirror_stream
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 HEX64 = re.compile(r"\b([0-9a-f]{64})\b")
 
 
-def _baris_server(proc, hasil, siap):
-    """Baca stdout server; tangkap pairing/token/fingerprint/aktif.
-
-    Satu loop tunggal — TIDAK boleh pecah menjadi loop dalam,
-    karena baris setelah token (mis. 'Sesi AKTIF') tetap harus
-    dibaca detektornya.
-    """
+def _baris_server(proc, hasil):
+    """Baca stdout server; tangkap pairing/fingerprint/token/aktif."""
     for line in proc.stdout:
         if hasil.get("pair") is None:
             m = re.search(r"Kode pairing\s*:\s*([0-9A-F]{4}-[0-9A-F]{4})", line)
@@ -50,11 +43,78 @@ def _baris_server(proc, hasil, siap):
                 hasil["tok"] = m.group(1)
         if "Sesi AKTIF" in line:
             hasil["aktif"] = True
-        if (hasil.get("tok") and hasil.get("pair") and hasil.get("fp")
-                and not siap.is_set()):
-            siap.set()
-    # stdout server tertutup (server mati)
     hasil["mati"] = True
+
+
+def jalankan_viewer(pair, tok, fp):
+    """Logika viewer mirror_viewer.py, IN-PROCESS (jendela stream milik
+    proses demo ini — mati bersama proses, tidak yatim)."""
+    import socket
+    import cv2
+    import numpy as np
+
+    raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw.settimeout(30)
+    raw.connect(("127.0.0.1", 8443))
+    sock = mirror_stream.make_client_ssl_ctx().wrap_socket(raw)
+    der = sock.getpeercert(binary_form=True)
+    if not mirror_stream.pin_cocok(der, fp):
+        print("!! PIN TIDAK COCOK — kemungkinan MITM. Batal.")
+        sock.close()
+        sys.exit(3)
+
+    mirror_stream.kirim_json(sock, {"cmd": "HELLO", "kode": pair,
+                                    "role": "viewer", "token": tok})
+    resp = mirror_stream.terima_json(sock)
+    if resp.get("cmd") != "WELCOME":
+        print(f"Ditolak server: {resp.get('alasan', resp)}")
+        sock.close()
+        sys.exit(1)
+
+    print(f"\n[demo] TERHUBUNG: {resp.get('device')} — stream aktif.")
+    print("[demo] Kontrol jendela stream: p jeda | r lanjut | q keluar "
+          "| Ctrl-C (terminal) akhiri sesi.\n")
+    berhenti = False
+    try:
+        while not berhenti:
+            jenis, data = mirror_stream.terima_frame(sock)
+            if jenis == "FRM":
+                img = cv2.imdecode(np.frombuffer(data, np.uint8),
+                                   cv2.IMREAD_COLOR)
+                if img is not None:
+                    cv2.imshow("WebCam Guard Mirror (lab — persetujuan aktif)",
+                               img)
+                    key = cv2.waitKey(30) & 0xFF
+                    if key == ord("p"):
+                        mirror_stream.kirim_json(sock, {"cmd": "PAUSE"})
+                    elif key == ord("r"):
+                        mirror_stream.kirim_json(sock, {"cmd": "RESUME"})
+                    elif key == ord("q"):
+                        mirror_stream.kirim_json(sock, {"cmd": "LEAVE"})
+                        berhenti = True
+            else:
+                cmd = data.get("cmd")
+                if cmd == "STOP":
+                    print("Pengirim menghentikan sesi.")
+                    break
+                if cmd == "STOP_DENIED":
+                    pass  # viewer memang tidak boleh stop
+                elif cmd == "PAUSED":
+                    print("[jeda — tekan r untuk lanjut]")
+                elif cmd == "REVOKED":
+                    print("Akses dicabut pengirim.")
+                    break
+                elif cmd == "BYE":
+                    break
+    finally:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 def main():
@@ -62,14 +122,9 @@ def main():
     if not os.path.exists(srv_path):
         sys.exit("mirror_server.py tidak ditemukan di folder ini.")
 
-    # Bersihkan jendela viewer sisa dari run sebelumnya (hanya proses
-    # python yang memiliki jendela berjudul 'WebCam Guard Mirror*');
-    # proses demo ini sendiri tidak kena filter WINDOWTITLE.
+    # Matikan SEMUA proses python lain (server/viewer sisa run lalu).
+    # Proses demo ini sendiri dikecualikan via PID.
     if sys.platform == "win32":
-        # Matikan SEMUA proses python LAIN (server/viewer sisa run lalu)
-        # — kecuali proses demo ini sendiri (PID ne). Filter WINDOWTITLE
-        # terbukti kurang ampuh: judul jendela mengandung karakter
-        # spesial dan taskkill tidak selalu cocok; PID filter pasti kena.
         subprocess.run(
             ["taskkill", "/F", "/IM", "python.exe",
              "/FI", "PID ne " + str(os.getpid())],
@@ -82,56 +137,46 @@ def main():
         stderr=subprocess.STDOUT, text=True,
         encoding="utf-8", errors="replace", cwd=BASE,
     )
-    # jawab kedua prompt server secara otomatis
     proc.stdin.write("SETUJU\ny\n")
     proc.stdin.flush()
 
     hasil = {"pair": None, "tok": None, "fp": None}
-    siap = threading.Event()
-    t = threading.Thread(
-        target=_baris_server, args=(proc, hasil, siap), daemon=True)
-    t.start()
+    threading.Thread(target=_baris_server, args=(proc, hasil),
+                     daemon=True).start()
 
-    if not siap.wait(timeout=60):
+    for _ in range(60):
+        if hasil.get("tok") and hasil.get("pair") and hasil.get("fp"):
+            break
+        if proc.poll() is not None:
+            sys.exit("[demo] Server mati di awal. Jalankan manual: "
+                     "python mirror_server.py")
+        time.sleep(1)
+    else:
         proc.kill()
-        sys.exit("[demo] GAGAL membaca pairing/token/fingerprint dari server "
-                 "dalam 60 detik. Jalankan manual: python mirror_server.py")
+        sys.exit("[demo] GAGAL membaca pairing/token/fingerprint (60 dtk).")
 
-    pair, tok, fp = hasil["pair"], hasil["tok"], hasil["fp"]
-
-    # Tunggu server mencetak "Sesi AKTIF" (= srv.start() sudah jalan,
-    # port listening). JANGAN probe port dengan socket — soket server
-    # adalah SSL server socket, handshake terjadi saat accept(); probe
-    # TCP yang langsung ditutup akan MENYANGKUT thread accept server
-    # dan viewer asli tidak dilayani (timeout).
+    # Tunggu server mencetak "Sesi AKTIF" (= port listening). Jangan
+    # probe port — soket server adalah SSL socket; probe TCP yang
+    # langsung ditutup akan menyangkut thread accept server.
     for _ in range(60):
         if hasil.get("aktif"):
             break
         if hasil.get("mati") or proc.poll() is not None:
-            sys.exit("[demo] Server mati sebelum listening. "
-                     "Jalankan manual: python mirror_server.py")
+            sys.exit("[demo] Server mati sebelum listening.")
         time.sleep(1)
     else:
         proc.kill()
-        sys.exit("[demo] Server tidak mencapai 'Sesi AKTIF' dalam 60 detik.")
-    time.sleep(1.0)  # margin kecil sebelum viewer connect
+        sys.exit("[demo] Server tidak mencapai 'Sesi AKTIF' (60 dtk).")
+    time.sleep(1.0)  # margin kecil sebelum connect
 
-    viewer = subprocess.Popen(
-        [sys.executable, os.path.join(BASE, "mirror_viewer.py"), pair,
-         "--host", "127.0.0.1", "--role", "viewer",
-         "--token", tok, "--pin", fp],
-        cwd=BASE,
-    )
     try:
-        viewer.wait()
+        jalankan_viewer(hasil["pair"], hasil["tok"], hasil["fp"])
     except KeyboardInterrupt:
-        pass
+        print("\n[demo] Ctrl-C — menutup sesi.")
+    except (ConnectionError, OSError) as e:
+        print(f"[demo] Koneksi bermasalah: {e}")
     finally:
-        print("\n[demo] Viewer selesai. Menutup server ...")
-        try:
-            viewer.terminate()
-        except Exception:
-            pass
+        print("[demo] Menutup server ...")
         proc.terminate()
         try:
             proc.wait(timeout=5)
