@@ -28,7 +28,12 @@ HEX64 = re.compile(r"\b([0-9a-f]{64})\b")
 
 
 def _baris_server(proc, hasil, siap):
-    """Baca stdout server, cetak ulang ke layar, tangkap nilai sesi."""
+    """Baca stdout server; tangkap pairing/token/fingerprint/aktif.
+
+    Satu loop tunggal — TIDAK boleh pecah menjadi loop dalam,
+    karena baris setelah token (mis. 'Sesi AKTIF') tetap harus
+    dibaca detektornya.
+    """
     for line in proc.stdout:
         if hasil.get("pair") is None:
             m = re.search(r"Kode pairing\s*:\s*([0-9A-F]{4}-[0-9A-F]{4})", line)
@@ -36,8 +41,6 @@ def _baris_server(proc, hasil, siap):
                 hasil["pair"] = m.group(1)
         if hasil.get("fp") is None:
             for m in HEX64.finditer(line):
-                # fingerprint dicetak di baris tersendiri SEBELUM token;
-                # token VIEWER ditandai labelnya, jadi cek dulu label.
                 if "Token" not in line:
                     hasil["fp"] = m.group(1)
                     break
@@ -45,11 +48,13 @@ def _baris_server(proc, hasil, siap):
             m = re.search(r"Token VIEWER\s*:\s*([0-9a-f]{64})", line, re.I)
             if m:
                 hasil["tok"] = m.group(1)
-        if hasil.get("tok") and hasil.get("pair") and hasil.get("fp"):
+        if "Sesi AKTIF" in line:
+            hasil["aktif"] = True
+        if (hasil.get("tok") and hasil.get("pair") and hasil.get("fp")
+                and not siap.is_set()):
             siap.set()
-            # terus cetak output server berikutnya (menu/status)
-            for _ in proc.stdout:
-                pass
+    # stdout server tertutup (server mati)
+    hasil["mati"] = True
 
 
 def main():
@@ -81,24 +86,22 @@ def main():
 
     pair, tok, fp = hasil["pair"], hasil["tok"], hasil["fp"]
 
-    # Tunggu port server benar-benar terbuka sebelum viewer connect
-    # (token dicetak server SEBELUM listen — dulu viewer langsung
-    # diluncurkan dan koneksi ditolak).
-    import socket as _s
-    print("[demo] Menunggu server siap ...")
+    # Tunggu server mencetak "Sesi AKTIF" (= srv.start() sudah jalan,
+    # port listening). JANGAN probe port dengan socket — soket server
+    # adalah SSL server socket, handshake terjadi saat accept(); probe
+    # TCP yang langsung ditutup akan MENYANGKUT thread accept server
+    # dan viewer asli tidak dilayani (timeout).
     for _ in range(60):
-        try:
-            c = _s.create_connection(("127.0.0.1", 8443), timeout=1)
-            c.close()
+        if hasil.get("aktif"):
             break
-        except OSError:
-            if proc.poll() is not None:
-                sys.exit("[demo] Server mati mendadak sebelum listening. "
-                         "Jalankan manual: python mirror_server.py")
-            time.sleep(1)
+        if hasil.get("mati") or proc.poll() is not None:
+            sys.exit("[demo] Server mati sebelum listening. "
+                     "Jalankan manual: python mirror_server.py")
+        time.sleep(1)
     else:
         proc.kill()
-        sys.exit("[demo] Port 8443 tidak terbuka dalam 60 detik.")
+        sys.exit("[demo] Server tidak mencapai 'Sesi AKTIF' dalam 60 detik.")
+    time.sleep(1.0)  # margin kecil sebelum viewer connect
 
     viewer = subprocess.Popen(
         [sys.executable, os.path.join(BASE, "mirror_viewer.py"), pair,
