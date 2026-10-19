@@ -187,6 +187,7 @@ def main():
     print("  Sesi AKTIF. Penonton (dengan kode+token) tampil di menu [6].\n")
 
     threading.Thread(target=menu_pengirim, args=(srv,), daemon=True).start()
+    threading.Thread(target=srv.accept_loop, daemon=True).start()
     try:
         loop_frame(srv, ambil, args.fps)
     except KeyboardInterrupt:
