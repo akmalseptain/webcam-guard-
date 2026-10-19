@@ -29,7 +29,6 @@ HEX64 = re.compile(r"\b([0-9a-f]{64})\b")
 def _baris_server(proc, hasil, siap):
     """Baca stdout server, cetak ulang ke layar, tangkap nilai sesi."""
     for line in proc.stdout:
-        print(line, end="")
         if hasil.get("pair") is None:
             m = re.search(r"Kode pairing\s*:\s*([0-9A-F]{4}-[0-9A-F]{4})", line)
             if m:
@@ -48,8 +47,8 @@ def _baris_server(proc, hasil, siap):
         if hasil.get("tok") and hasil.get("pair") and hasil.get("fp"):
             siap.set()
             # terus cetak output server berikutnya (menu/status)
-            for line2 in proc.stdout:
-                print(line2, end="")
+            for _ in proc.stdout:
+                pass
 
 
 def main():
@@ -57,7 +56,7 @@ def main():
     if not os.path.exists(srv_path):
         sys.exit("mirror_server.py tidak ditemukan di folder ini.")
 
-    print("[demo] Menjalankan MIRROR SERVER ...")
+    print("[demo] Server menyala... tunggu jendela stream muncul.")
     proc = subprocess.Popen(
         [sys.executable, "-u", srv_path],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -80,8 +79,6 @@ def main():
                  "dalam 60 detik. Jalankan manual: python mirror_server.py")
 
     pair, tok, fp = hasil["pair"], hasil["tok"], hasil["fp"]
-    print("\n[demo] Server siap. Menjalankan VIEWER otomatis ...")
-    print(f"[demo] pairing={pair} (tidak perlu disalin — otomatis)\n")
 
     viewer = subprocess.Popen(
         [sys.executable, os.path.join(BASE, "mirror_viewer.py"), pair,
